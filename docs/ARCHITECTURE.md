@@ -2,7 +2,7 @@
 
 ## Decision
 
-Single-process TypeScript Node.js 22 application, SQLite as durable relational storage, static browser client. This keeps the demo credential-free and avoids paid hosted infrastructure. The server's loopback-only binding is deliberate; this is not production authorization.
+Single-process TypeScript Node.js 22 application, SQLite as durable relational storage, static browser client. This keeps the default synthetic demo credential-free and avoids paid hosted infrastructure. Optional local password sessions with three role levels are supported, but loopback-only binding remains mandatory and this is not production authorization.
 
 ## Data and relationships
 
@@ -28,8 +28,8 @@ Alert calculations are deterministic rules. Linear pacing is simply `(elapsed in
 
 - Treat CSV, text fields, rendered error messages and any future AI output as untrusted data.
 - The server processes bounded-size JSON/CSV and the UI escapes record text.
-- The demo has a single identity and **does not authenticate requests**. Loopback binding is its deployment safeguard, not a production permission strategy.
-- Must add authenticated organization claims, role-based privileges, CSRF protections appropriate to chosen auth, tenant-scoped queries at HTTP boundary, structured request schema validation, migration versioning, rate limiting, secure logging and production secrets infrastructure before genuine use.
+- The demo has a fixed organization. If role passwords are configured, the server checks HTTP session and CSRF tokens and role privileges; if not, the local synthetic demo remains open. No individual identity or production multi-tenancy exists. Loopback binding remains mandatory.
+- Must add genuine individual identities, server-derived organization claims, robust tenant-scoped HTTP authorization, structured request schemas, migration versioning, durable rate limiting, secure logging and production secrets infrastructure before real data use.
 - Provider-specific CRM credentials and adapters must be server-only, read-only, and clearly marked connected or disconnected.
 
 ## P0 versus parking lot

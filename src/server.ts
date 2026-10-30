@@ -4,6 +4,7 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {openDB,DEMO_ORG} from './db.ts';
 import {reportCsv} from './domain.ts';
+import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
 import {dashboard,stageImport,commitImport,importDetail,snapshotDetail,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
 const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
@@ -12,8 +13,8 @@ const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
 if(!['127.0.0.1','localhost'].includes(host))throw Error('Cedar demo must bind to a loopback host only');
 if(!Number.isInteger(port)||port<1||port>65535)throw Error('PORT must be a valid TCP port');
 const csp="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
-function send(res:ServerResponse,status:number,body:string|object,contentType='application/json; charset=utf-8'){
- res.writeHead(status,{'Content-Type':contentType,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':csp,'Referrer-Policy':'no-referrer'});
+function send(res:ServerResponse,status:number,body:string|object,contentType='application/json; charset=utf-8',extra:Record<string,string>={}){
+ res.writeHead(status,{'Content-Type':contentType,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':csp,'Referrer-Policy':'no-referrer',...extra});
  res.end(typeof body==='string'?body:JSON.stringify(body));
 }
 function parseJson(req:IncomingMessage):Promise<any>{return new Promise((resolve,reject)=>{
@@ -27,6 +28,18 @@ async function router(req:IncomingMessage,res:ServerResponse){
  const u=new URL(req.url||'/',`http://${host}:${port}`),url=u.pathname,method=req.method||'GET';
  try{
   if(!new Set([`${host}:${port}`,`127.0.0.1:${port}`,`localhost:${port}`]).has(req.headers.host||''))throw Object.assign(Error('Host not permitted for local demo'),{status:403});
+  // Authentication is optional in synthetic-only mode; protected mode uses an ephemeral server-side session.
+  if(method==='GET'&&url==='/api/auth/status')return send(res,200,authStatus(req));
+  if(method==='POST'){
+   const origin=req.headers.origin;
+   if(origin&&origin!==`http://${req.headers.host}`)throw Object.assign(Error('Cross-origin write rejected'),{status:403});
+   if(req.headers['sec-fetch-site']==='cross-site')throw Object.assign(Error('Cross-site write rejected'),{status:403});
+   if(!['application/json','application/json; charset=utf-8'].includes(req.headers['content-type']||''))throw Object.assign(Error('Expected application/json'),{status:415});
+   if(url==='/api/auth/login'){const body=await parseJson(req);const result=authLogin(req,body.role,body.password);return send(res,200,{authenticated:true,role:result.role,csrfToken:result.csrfToken},undefined,{'Set-Cookie':result.cookie});}
+  }
+  // The application shell has no private data; all API and fixture access is checked server-side.
+  if(url.startsWith('/api/')||url.startsWith('/fixtures/'))checkAccess(req,method,url);
+  if(method==='POST'&&url==='/api/auth/logout'){return send(res,200,{authenticated:false},undefined,{'Set-Cookie':authLogout(req)});}
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)$/))return send(res,200,snapshotDetail(db,match(url,/^\/api\/snapshots\/([\w-]+)$/)![0]));
@@ -49,8 +62,6 @@ async function router(req:IncomingMessage,res:ServerResponse){
   if(method==='POST'){
    if(!['application/json','application/json; charset=utf-8'].includes(req.headers['content-type']||''))throw Object.assign(Error('Expected application/json'),{status:415});
    // Same-origin local demo only; requests from unrelated web origins are never authorized.
-   const origin=req.headers.origin;
-   if(origin && origin!==`http://${host}:${port}`)throw Object.assign(Error('Cross-origin write rejected'),{status:403});
    const body=await parseJson(req);
    if(url==='/api/imports/stage')return send(res,201,stageImport(db,{csv:String(body.csv||''),sourceAsOf:String(body.sourceAsOf||''),expectedRows:body.expectedRows,notes:body.notes}));
    if(match(url,/^\/api\/imports\/([\w-]+)\/commit$/))return send(res,201,commitImport(db,match(url,/^\/api\/imports\/([\w-]+)\/commit$/)![0],{acceptQuarantine:body.acceptQuarantine===true,asOf:body.asOf}));

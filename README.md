@@ -33,6 +33,18 @@ The smallest complete workflow is:
 
 The interface contains six screens: **Portfolio, Obligations, Data imports, Alerts, Report drafts, and Configuration.**
 
+## Optional local sign-in and role permissions
+
+By default the synthetic demonstration remains open on `127.0.0.1` without credentials. For a password-protected **local-only** demo, configure an administrator password before starting:
+
+```bash
+CEDAR_ADMIN_PASSWORD="choose-a-long-unique-password" npm start
+```
+
+For separately limited demo access, also set `CEDAR_REVIEWER_PASSWORD` and/or `CEDAR_VIEWER_PASSWORD`. Every configured password must have 12–256 characters. The browser presents a sign-in form and uses an eight-hour, server-held session with an HttpOnly SameSite cookie. The server requires a CSRF token for authenticated writes. Viewers can inspect records, reviewers can stage imports, manage alerts and draft reports, and administrators can publish imports, amend grant rules and reset demo data. Roles without configured passwords cannot sign in. Passwords and active sessions are **not** committed to the repository; see [security limitations](docs/SECURITY.md).
+
+This is a useful defense-in-depth step for a trusted local demonstration, **not** a production identity provider or multi-organization security model. The server still binds only to loopback.
+
 ## What works in this version
 
 | Capability | Implementation |
@@ -47,12 +59,13 @@ The interface contains six screens: **Portfolio, Obligations, Data imports, Aler
 | Reporting | JSON and CSV **draft** exports with as-of date, source hash, versions, counts, exceptions, and evidence references; no external submission |
 | Rule review | Preview before enabling a new draft definition; effective-dated target amendments |
 | Demo recovery | Repeatable fixtures and scoped reset |
+| Optional local access control | Configurable password sign-in; viewer/reviewer/admin permissions enforced at HTTP endpoints, CSRF and origin checks |
 
 **Exact checks:** 25 qualifying placement records include two already-counted people, so the result is **23 distinct people**. A target of 40 at day 45 of a 90-day window produces a **linear pacing baseline of 20**—a stated assumption, not proof of program failure.
 
 ### Current limitations
 
-This is **local-only** and has **no login, session security or true tenant-facing permission enforcement**. The server binds to `127.0.0.1` by default and uses a single synthetic organization; tested organization-scoped service methods are not a substitute for authenticated authorization at the HTTP boundary. The application must not be publicly hosted, connected to production exports or used to submit reports without an authentication and security review. It has no production CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
+This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, but they are ephemeral, shared-role credentials rather than user identity, and they do not constitute production-ready tenant isolation. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default and uses a single synthetic organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no production CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
 
 The CSV completeness flag depends on the supplied expected row count; a misleading source export can still look complete. For a pilot, reconcile against authoritative CRM export totals and a reviewed metric dictionary. See [architecture](docs/ARCHITECTURE.md), [operator guide](docs/OPERATIONS.md), [security boundary](docs/SECURITY.md), and [pilot plan](docs/PILOT.md).
 
@@ -89,9 +102,9 @@ There is no generative-AI-driven rules engine: metric definitions, source mappin
 npm test
 ```
 
-Tests cover the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, data immutability, and scoped reset.
+Tests cover the local sign-in boundary (unauthenticated GETs, role authorization, CSRF and origin rejection, logout), the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, data immutability, and scoped reset.
 
-CI runs these tests on Node 22; a green CI run is **not** a security or regulatory certification.
+CI runs these tests on Node 22; a green CI run is **not** a security or regulatory certification. Browser automation was blocked by the execution environment and is still pending; see [verification log](docs/VERIFICATION.md).
 
 ## Repository
 

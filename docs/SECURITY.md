@@ -1,9 +1,21 @@
 # Security and privacy boundary
 
-**Not production-ready. Do not deploy to the internet.** This repository deliberately contains only fictional identifiers and synthetic records, and the HTTP server listens on `127.0.0.1` by default. It has no real authentication and uses a fixed demo organization. Service-level tenant checks tested in this repository do not turn the demo into a secure multi-tenant service.
+**Not production-ready. Do not deploy to the internet.** This repository contains only synthetic records, and the HTTP server binds to `127.0.0.1` (or localhost). There is one fixed demo organization. Service-level organization checks are not a substitute for production authentication and tenant isolation.
 
-Never commit `.env`, a SQLite file under `data/`, real CSV exports, CRM tokens, participant names or addresses, or confidential grant agreements. The supplied fixture files are deterministic and synthetic. Report drafts are for human review, not automated approval or submission.
+## Optional local access gate
 
-Before a real pilot: perform a threat-model review; add identity/session handling and server-side role-based organization authorization; persist minimum necessary identifiers; add secure source retention and deletion policies; review backups and audit access; implement robust input and file parsing limits; and get customer approval for any data import. Test cross-tenant access at the HTTP layer with real identity claims.
+To enable password protection, set `CEDAR_ADMIN_PASSWORD` (12–256 characters) in the server environment before starting. Optionally set separate `CEDAR_REVIEWER_PASSWORD` and `CEDAR_VIEWER_PASSWORD`. Leaving them unset runs the **open synthetic demo**. The server refuses reviewer/viewer credentials if no administrator password exists.
 
-No claim of HIPAA, SOC 2, GDPR or other compliance certification is made. No secret or production CRM integration is required in demo mode.
+| Role | View portfolio, underlying synthetic records, reports | Stage CSV / alerts / create draft | Commit imports / modify grant rules / reset |
+|---|---|---|---|
+| Viewer | Yes | No | No |
+| Reviewer | Yes | Yes | No |
+| Administrator | Yes | Yes | Yes |
+
+Passwords are held only in server environment variables and compared as fixed-length SHA-256 digests with timing-safe equality. An in-memory rate limit rejects more than six failed login attempts per loopback address within 15 minutes. A successful login creates an eight-hour in-memory session identified by a random 256-bit HttpOnly SameSite=Strict cookie. A separate unpredictable CSRF token must accompany state-changing requests; host, Origin, and Sec-Fetch-Site checks reject unauthorized cross-site requests. Logging out invalidates the server-side session. A server restart removes every session; sessions are not persistent. Browser JavaScript only receives the CSRF token, never the password hash or session cookie contents.
+
+These controls are for local demo defense in depth only: no TLS, no SSO, no unique human users, no MFA, no persistent failed-attempt protection, no per-user audit attribution, no credential recovery or rotation workflow, no true multi-tenant identity claims, and no external exposure. Session cookies are intentionally not marked Secure because the interface is HTTP loopback; production HTTPS would require Secure cookies and a different deployment architecture. Staging roles do not imply production access approval. All browser-side hiding of controls is cosmetic; HTTP permission checks are authoritative.
+
+Never commit `.env`, SQLite files under `data/`, real CSV exports, CRM tokens, participant names/addresses, or confidential grant agreements. Source CSV text is untrusted, imports are size-bounded, browser output escapes record text, and frozen snapshots retain provenance. Funder reports remain drafts for human approval. No active production CRM or identity connector exists.
+
+Before a real pilot: independent threat-model and access-control audit; proper identity provider and unique users; authenticated, server-derived tenant authorization; audit attribution; HTTPS and secret management; structured request schemas; robust CSV/file safety limits; session revocation; data minimization and retention/deletion; backup protection; real identity- and tenant-scoped HTTP tests; customer permission for private data. No claim of HIPAA, SOC 2, GDPR or other compliance certification is made.

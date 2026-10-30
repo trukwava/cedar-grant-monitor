@@ -18,7 +18,7 @@ curl -s -X POST http://127.0.0.1:4173/api/reports \
   -H 'Content-Type: application/json' -d '{"snapshotId":"REPLACE_WITH_ID"}'
 ```
 
-All write endpoints are demo-only and unauthenticated. Do not open a public port. Running from the repository root is required for relative fixture and database paths.
+The curl examples above apply to the default open synthetic demo. In protected mode, use the browser sign-in page (session cookie + CSRF header are required for writes). Viewer access is read-only; reviewers can stage CSVs, manage alerts and draft reports; administrators can commit imports, amend rules and reset data. To enable local password protection, set `CEDAR_ADMIN_PASSWORD` and optionally separate `CEDAR_REVIEWER_PASSWORD`/`CEDAR_VIEWER_PASSWORD` before running `npm start`. These are shared demo roles, not production user accounts. Do not open a public port. Running from the repository root is required for relative fixture and database paths.
 
 ### Troubleshooting
 

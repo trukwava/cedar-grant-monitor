@@ -5,7 +5,8 @@ const dt=s=>s?new Date(s+'T12:00:00Z').toLocaleDateString('en-US',{month:'short'
 const pct=(a,b)=>b?Math.min(100,Math.round(a/b*100)):100;
 const progress=(a,b,baseline)=>`<div class="progress-label"><span>${a} <span class="muted">/ ${b}</span></span><span class="muted">${pct(a,b)}%</span></div><div class="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct(a,b)}" aria-label="${a} achieved out of ${b}"><div class="fill ${a<baseline?'amber':''}" style="width:${pct(a,b)}%"></div></div>`;
 const badge=(label,kind='gray')=>`<span class="badge ${kind}">${esc(label)}</span>`;
-const endpoint=async(path,options={})=>{const resp=await fetch(path,{headers:{'Content-Type':'application/json'},...options});let data;try{data=await resp.json();}catch{data={error:'Invalid server response'};}if(!resp.ok)throw Error(data.error||`HTTP ${resp.status}`);return data;};
+let auth=null;
+const endpoint=async(path,options={})=>{const headers={'Content-Type':'application/json',...(auth?.csrfToken&&options.method==='POST'?{'X-Cedar-CSRF':auth.csrfToken}:{}),...(options.headers||{})};const resp=await fetch(path,{...options,headers});let data;try{data=await resp.json();}catch{data={error:'Invalid server response'};}if(!resp.ok)throw Error(data.error||`HTTP ${resp.status}`);return data;};
 const post=(path,body={})=>endpoint(path,{method:'POST',body:JSON.stringify(body)});
 let data=null,view='overview',selectedKey=null,selectedImport=null,selectedReport=null,focusAfter=false;
 function toast(message,error=false){const el=$('#toast');el.textContent=message;el.className='toast show'+(error?' error':'');clearTimeout(window.toastTimer);window.toastTimer=setTimeout(()=>el.className='toast',4100);}
@@ -16,7 +17,19 @@ function activeAlerts(){return (data?.alerts||[]).filter(a=>a.state!=='resolved'
 function selectedSnapshot(){return data?.snapshot?.snapshot;}
 function refreshHeader(){const count=activeAlerts().length;$('#alert-count').textContent=count||'';$('#asof-label').textContent=selectedSnapshot()?`As of ${dt(selectedSnapshot().as_of)}`:'No published snapshot';
  document.querySelectorAll('[data-nav]').forEach(x=>x.classList.toggle('active',x.dataset.nav===view));$('#crumb').textContent=nice(view);}
-async function load(show=false){try{if(show)$('#main').innerHTML='<div class="loading">Loading…</div>';data=await endpoint('/api/bootstrap');render();}catch(e){$('#main').innerHTML=`<div class="callout red">Could not load portfolio: ${esc(e.message)}. ${button('Retry','data-retry','small')}</div>`;}}
+async function load(show=false){try{if(show)$('#main').innerHTML='<div class="loading">Loading…</div>';auth=await endpoint('/api/auth/status');if(auth.enabled&&!auth.authenticated){showLogin();return;}data=await endpoint('/api/bootstrap');showSessionInfo();render();}catch(e){$('#main').innerHTML=`<div class="callout red">Could not load portfolio: ${esc(e.message)}. ${button('Retry','data-retry','small')}</div>`;}}
+function showSessionInfo(){
+ document.body.dataset.cedarRole=auth?.enabled&&!auth.authenticated?'guest':auth?.role||'admin';
+ document.querySelectorAll('#navigation button').forEach(button=>button.disabled=document.body.dataset.cedarRole==='guest');
+ let spot=document.querySelector('#session-controls');
+ if(!spot){spot=document.createElement('span');spot.id='session-controls';document.querySelector('.top-right').appendChild(spot);}
+ spot.innerHTML=auth?.enabled&&auth.authenticated?`<span class="asof-tag">${esc(nice(auth.role))}</span> <button class="btn small signout" data-logout>Sign out</button>`:'';
+}
+function showLogin(){
+ data=null;showSessionInfo();
+ document.querySelector('#main').innerHTML=`<section class="auth-panel" aria-labelledby="sign-in-heading"><h1 id="sign-in-heading">Cedar Pathways sign in</h1><p>Local demonstration access. No external identity provider or production customer data.</p><form id="login-form"><label for="login-role">Demo role</label><select id="login-role" class="field">${(auth?.availableRoles||['admin']).map(r=>`<option value="${esc(r)}">${esc(nice(r))}</option>`).join('')}</select><label for="login-password">Password</label><input id="login-password" class="field" type="password" required minlength="12" autocomplete="current-password"><button class="btn primary" type="submit">Sign in</button><p class="auth-error" id="login-error" role="alert"></p></form><p class="auth-hint">The server checks every API request and enforces role permissions. Contact the local demo operator for access.</p></section>`;
+ document.querySelector('#login-password').focus();
+}
 function render(){refreshHeader();if(selectedKey){renderObligationDetail(selectedKey);return;}if(selectedImport){renderImportDetail(selectedImport);return;}if(selectedReport){renderReportDetail(selectedReport);return;}
  const pages={overview:renderOverview,obligations:renderObligations,imports:renderImports,alerts:renderAlerts,reports:renderReports,config:renderConfig};$('#main').innerHTML=(pages[view]||renderOverview)();if(focusAfter){$('#main').focus();focusAfter=false;}}
 function openView(v){view=v;selectedKey=null;selectedImport=null;selectedReport=null;focusAfter=true;render();}
@@ -98,7 +111,8 @@ async function handleClick(event){const el=event.target.closest('button[data-nav
  if(el.hasAttribute('data-reset')){if(window.prompt('Reset ONLY Cedar Pathways demo? Type RESET DEMO to confirm:')!=='RESET DEMO')return;await post('/api/demo/reset',{confirm:'RESET DEMO'});toast('Synthetic demo restored');return load(true);}
  }catch(e){toast(e.message,true);}
 }
+document.addEventListener('click',async event=>{if(!event.target.closest('[data-logout]'))return;try{await post('/api/auth/logout');auth=null;await load(true);}catch(e){toast(e.message,true);}});
 document.addEventListener('click',handleClick);
-document.addEventListener('submit',async event=>{if(event.target.id!=='import-form')return;event.preventDefault();const file=$('#csv-file').files[0];if(!file)return toast('Choose a CSV',true);if(file.size>2_000_000)return toast('CSV exceeds 2MB',true);
+document.addEventListener('submit',async event=>{if(event.target.id==='login-form'){event.preventDefault();const error=$('#login-error');error.textContent='';try{auth=await post('/api/auth/login',{role:$('#login-role').value,password:$('#login-password').value});await load(true);}catch(e){error.textContent=e.message;}return;}if(event.target.id!=='import-form')return;event.preventDefault();const file=$('#csv-file').files[0];if(!file)return toast('Choose a CSV',true);if(file.size>2_000_000)return toast('CSV exceeds 2MB',true);
  const button=event.target.querySelector('[type=submit]');button.disabled=true;button.textContent='Validating…';try{const csv=await file.text(),expected=getField('expected-rows');const d=await post('/api/imports/stage',{csv,sourceAsOf:getField('source-asof'),expectedRows:expected?Number(expected):undefined,notes:'Uploaded through local demo staging'});toast('Import staged: '+d.valid_count+' valid records; '+d.quarantined+' quarantined');await load();showImport(d.id);}catch(e){toast(e.message,true);button.disabled=false;button.textContent='Validate & stage import';}});
 load(true);
