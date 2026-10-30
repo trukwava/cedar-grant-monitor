@@ -33,17 +33,20 @@ The smallest complete workflow is:
 
 The interface contains six screens: **Portfolio, Obligations, Data imports, Alerts, Report drafts, and Configuration.**
 
-## Optional local sign-in and role permissions
+## Local sign-in, named accounts, and role permissions
 
-By default the synthetic demonstration remains open on `127.0.0.1` without credentials. For a password-protected **local-only** demo, configure an administrator password before starting:
+By default, the synthetic demo runs on loopback without credentials. To protect the demo with a shared administrator role, set `CEDAR_ADMIN_PASSWORD` (12–256 characters) and optionally `CEDAR_REVIEWER_PASSWORD` and `CEDAR_VIEWER_PASSWORD`. Role passwords are shared demo identities, not named individuals.
 
-```bash
-CEDAR_ADMIN_PASSWORD="choose-a-long-unique-password" npm start
+For **separate named local accounts**, instead set `CEDAR_USERS_JSON` to an array of objects with `username`, `orgId`, `role`, and `password`. These accounts are bound to an existing organization **on the server**; never supply an organization ID through a browser request to select another tenant. For example, use fictional local secrets in a private environment file (not in source control):
+
+```json
+[
+  {"username":"demo-lead","orgId":"cedar-demo","role":"admin","password":"replace-with-strong-secret"},
+  {"username":"demo-auditor","orgId":"cedar-demo","role":"viewer","password":"replace-with-different-secret"}
+]
 ```
 
-For separately limited demo access, also set `CEDAR_REVIEWER_PASSWORD` and/or `CEDAR_VIEWER_PASSWORD`. Every configured password must have 12–256 characters. The browser presents a sign-in form and uses an eight-hour, server-held session with an HttpOnly SameSite cookie. The server requires a CSRF token for authenticated writes. Viewers can inspect records, reviewers can stage imports, manage alerts and draft reports, and administrators can publish imports, amend grant rules and reset demo data. Roles without configured passwords cannot sign in. Passwords and active sessions are **not** committed to the repository; see [security limitations](docs/SECURITY.md).
-
-This is a useful defense-in-depth step for a trusted local demonstration, **not** a production identity provider or multi-organization security model. The server still binds only to loopback.
+The optional modes are mutually exclusive. Named credentials are salted and checked using scrypt; sessions expire after eight hours and are invalidated by restart. Every API read uses the session's organization, and edits are attributed to the named user in the audit history. A separate organization must be explicitly provisioned in the local SQLite database; the demo reset affects Cedar only. These features are **not** production identity management: there is no SSO, MFA, TLS, persistent sessions or account-management UI. See [security](docs/SECURITY.md) and [operator guide](docs/OPERATIONS.md).
 
 ## What works in this version
 
@@ -59,14 +62,14 @@ This is a useful defense-in-depth step for a trusted local demonstration, **not*
 | Reporting | JSON and CSV **draft** exports with as-of date, source hash, versions, counts, exceptions, and evidence references; no external submission |
 | Rule review | Preview before enabling a new draft definition; effective-dated target amendments |
 | Demo recovery | Repeatable fixtures and scoped reset |
-| Optional local access control | Configurable password sign-in; viewer/reviewer/admin permissions enforced at HTTP endpoints, CSRF and origin checks |
-| Cross-organization integrity | SQLite triggers reject cross-organization foreign references on insert and ownership-changing updates; migration preflight detects legacy violations |
+| Optional local access control | Role-password or named-account sign-in; server-derived organization and actor, viewer/reviewer/admin HTTP permissions, CSRF and origin checks |
+| Cross-organization integrity | SQLite guards reject cross-organization references, parent ownership transfers and in-place changes to versioned definitions; migration preflight detects legacy violations |
 
 **Exact checks:** 25 qualifying placement records include two already-counted people, so the result is **23 distinct people**. A target of 40 at day 45 of a 90-day window produces a **linear pacing baseline of 20**—a stated assumption, not proof of program failure.
 
 ### Current limitations
 
-This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, but they are ephemeral, shared-role credentials rather than user identity, and they do not constitute production-ready tenant isolation. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default and uses a single synthetic organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no production CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
+This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, including optional named-account credentials and tenant-scoped HTTP routing, but they do not constitute production-ready identity or multi-tenant security. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default; Cedar is the only automatically provisioned organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no production CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
 
 The CSV completeness flag depends on the supplied expected row count; a misleading source export can still look complete. For a pilot, reconcile against authoritative CRM export totals and a reviewed metric dictionary. See [architecture](docs/ARCHITECTURE.md), [operator guide](docs/OPERATIONS.md), [security boundary](docs/SECURITY.md), and [pilot plan](docs/PILOT.md).
 

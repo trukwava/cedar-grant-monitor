@@ -1,9 +1,13 @@
 import { DatabaseSync } from 'node:sqlite';
 import fs from 'node:fs';
+import {AsyncLocalStorage} from 'node:async_hooks';
 import path from 'node:path';
 
 export const DEMO_ORG='cedar-demo';
 export const DEMO_USER='cedar-lead';
+const requestIdentity = new AsyncLocalStorage<{actor:string;orgId:string}>();
+export const currentOrg=()=>requestIdentity.getStore()?.orgId||DEMO_ORG;
+export const withIdentity=<T>(identity:{actor:string;orgId:string},fn:()=>T):T=>requestIdentity.run(identity,fn);
 export const DEFAULT_AS_OF='2026-10-29';
 export type DB = DatabaseSync;
 export function openDB(filename = process.env.DB_PATH || './data/cedar.sqlite'): DB {
@@ -41,6 +45,7 @@ CREATE INDEX IF NOT EXISTS idx_snapshots_org ON calculation_snapshots(org_id,cre
 CREATE INDEX IF NOT EXISTS idx_alerts_org ON alerts(org_id,state);
 `);
  installScopeGuards(db);
+ installImmutableDefinitionGuards(db);
 }
 /** Defense in depth: SQLite FKs verify that referenced rows exist, but not that
  * both sides belong to the same organization. These guards enforce tenancy at
@@ -77,6 +82,29 @@ function installScopeGuards(db:DB):void {
  }
 }
 
+/** Domain definitions and time windows are versioned facts, not mutable configuration.
+ * Both imported history and successor calculations depend on stable versions.
+ * Demo reset explicitly deletes the demo-only rows; ordinary UPDATE is barred.
+ */
+function installImmutableDefinitionGuards(db:DB):void {
+ const immutable:Record<string,string>={
+  metric_definition_versions:'org_id, metric_key, version, unit, event_type, program_code, needs_evidence, source_mapping_json, created_at',
+  obligation_versions:'grant_id, period_id, metric_version_id, obligation_key, version, target, effective_on, owner, evidence_rule',
+  grant_periods:'grant_id, label, starts_on, ends_on, report_due_on',
+ };
+ for(const [table,columns] of Object.entries(immutable)){
+  db.exec(`CREATE TRIGGER IF NOT EXISTS immutable_${table} BEFORE UPDATE OF ${columns} ON ${table}
+   BEGIN SELECT RAISE(ABORT,'Historical definition fields are immutable; create a new version'); END;`);
+ }
+ // Parent ownership mutations would undermine the child-scoped FK guards.
+ for(const table of ['grants','source_datasets','record_mappings','users','audit_events']){
+  db.exec(`CREATE TRIGGER IF NOT EXISTS fixed_ownership_${table} BEFORE UPDATE OF org_id ON ${table}
+   WHEN NEW.org_id != OLD.org_id BEGIN SELECT RAISE(ABORT,'Organization ownership is immutable'); END;`);
+ }
+ db.exec(`CREATE TRIGGER IF NOT EXISTS fixed_demo_flag BEFORE UPDATE OF is_demo ON organizations
+  WHEN NEW.is_demo != OLD.is_demo BEGIN SELECT RAISE(ABORT,'Demo organization designation is immutable'); END;`);
+}
+
 export function assertOrg(db:DB, entityTable:'grants'|'alerts'|'report_drafts'|'import_batches'|'calculation_snapshots', entityId:string, orgId:string):void {
  const found = db.prepare(`SELECT id FROM ${entityTable} WHERE id=? AND org_id=?`).get(entityId,orgId);
  if(!found) throw Object.assign(new Error('Not found in current organization'),{status:404});
@@ -84,5 +112,5 @@ export function assertOrg(db:DB, entityTable:'grants'|'alerts'|'report_drafts'|'
 export const now = ()=>new Date().toISOString();
 export const uid = (p:string)=>p+'-'+crypto.randomUUID().slice(0,12);
 export function audit(db:DB, orgId:string, kind:string, entityType:string, entityId:string, details:object={},actor=DEMO_USER):void {
- db.prepare('INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?)').run(uid('aud'),orgId,actor,now(),kind,entityType,entityId,JSON.stringify(details));
+ db.prepare('INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?)').run(uid('aud'),orgId,requestIdentity.getStore()?.actor||actor,now(),kind,entityType,entityId,JSON.stringify(details));
 }

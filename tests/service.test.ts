@@ -147,7 +147,7 @@ test('SQLite rejects cross-organization relationships on INSERT and UPDATE, even
  throws(()=>db.prepare(`INSERT INTO snapshot_totals SELECT 'x-total','partner-snap',obligation_version_id,obligation_key,achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id),/Cross-organization reference rejected/);
  throws(()=>db.prepare('UPDATE report_drafts SET org_id=? WHERE id=?').run('partner-org',report.id),/Cross-organization reference rejected/);
  throws(()=>db.prepare('UPDATE calculation_snapshots SET batch_id=? WHERE id=?').run('partner-batch',snapshot.id),/Cross-organization reference rejected/);
- throws(()=>db.prepare('UPDATE obligation_versions SET metric_version_id=? WHERE id=?').run('partner-metric',obligation.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('UPDATE obligation_versions SET metric_version_id=? WHERE id=?').run('partner-metric',obligation.id),/(Cross-organization reference rejected|Historical definition fields are immutable)/);
  db.prepare(`INSERT INTO snapshot_totals SELECT 'partner-total','partner-snap','partner-ob','partner-placements',achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id);
  assert.equal((db.prepare("SELECT COUNT(*) n FROM snapshot_totals WHERE snapshot_id='partner-snap'").get() as any).n,1);
  assert.equal(dashboard(db).organization.id,DEMO_ORG);
@@ -168,5 +168,39 @@ test('migration refuses pre-existing cross-organization references instead of tr
  migrate(db);
  const report=db.prepare('SELECT org_id FROM report_drafts WHERE id=?').get(r.id) as any;
  assert.equal(report.org_id,DEMO_ORG);
+ db.close();
+});
+
+
+test('a source hash cannot be relabeled with a newer export date or different completeness assertion',()=>{
+ const db=openDB(':memory:');seedDemo(db);
+ const csv=sampleCsv();
+ const original=stageImport(db,{csv,sourceAsOf:'2026-10-29',expectedRows:120});
+ assert.equal(stageImport(db,{csv,sourceAsOf:'2026-10-29',expectedRows:120}).id,original.id);
+ assert.throws(()=>stageImport(db,{csv,sourceAsOf:'2026-10-30',expectedRows:120}),/Identical source bytes already exist/);
+ assert.throws(()=>stageImport(db,{csv,sourceAsOf:'2026-10-29',expectedRows:121}),/Identical source bytes already exist/);
+ const stored=db.prepare('SELECT source_as_of,expected_rows FROM import_batches WHERE id=?').get(original.id) as any;
+ assert.equal(stored.source_as_of,'2026-10-29');assert.equal(stored.expected_rows,120);
+ db.close();
+});
+
+
+test('versioned rules and parent organization ownership are immutable at database boundary',()=>{
+ const db=setup();
+ db.prepare('INSERT INTO organizations VALUES(?,?,?)').run('different-owner','Other tenant',0);
+ const metric=db.prepare('SELECT * FROM metric_definition_versions LIMIT 1').get() as any;
+ const obligation=db.prepare('SELECT * FROM obligation_versions LIMIT 1').get() as any;
+ const period=db.prepare('SELECT * FROM grant_periods LIMIT 1').get() as any;
+ const grant=db.prepare('SELECT * FROM grants LIMIT 1').get() as any;
+ const dataset=db.prepare('SELECT * FROM source_datasets LIMIT 1').get() as any;
+ throws(()=>db.prepare('UPDATE metric_definition_versions SET unit=? WHERE id=?').run('attendance_instances',metric.id),/Historical definition fields are immutable/);
+ throws(()=>db.prepare('UPDATE obligation_versions SET target=target+1 WHERE id=?').run(obligation.id),/Historical definition fields are immutable/);
+ throws(()=>db.prepare('UPDATE grant_periods SET report_due_on=? WHERE id=?').run('2027-12-31',period.id),/Historical definition fields are immutable/);
+ throws(()=>db.prepare('UPDATE grants SET org_id=? WHERE id=?').run('different-owner',grant.id),/Organization ownership is immutable/);
+ throws(()=>db.prepare('UPDATE source_datasets SET org_id=? WHERE id=?').run('different-owner',dataset.id),/Organization ownership is immutable/);
+ throws(()=>db.prepare('UPDATE organizations SET is_demo=0 WHERE id=?').run(DEMO_ORG),/Demo organization designation is immutable/);
+ // Status promotion is still allowed, which preserves the versioned draft workflow.
+ db.prepare('UPDATE metric_definition_versions SET status=? WHERE id=?').run('draft',metric.id);
+ assert.equal((db.prepare('SELECT status FROM metric_definition_versions WHERE id=?').get(metric.id) as any).status,'draft');
  db.close();
 });

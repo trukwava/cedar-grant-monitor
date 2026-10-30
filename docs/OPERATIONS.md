@@ -18,7 +18,7 @@ curl -s -X POST http://127.0.0.1:4173/api/reports \
   -H 'Content-Type: application/json' -d '{"snapshotId":"REPLACE_WITH_ID"}'
 ```
 
-The curl examples above apply to the default open synthetic demo. In protected mode, use the browser sign-in page (session cookie + CSRF header are required for writes). Viewer access is read-only; reviewers can stage CSVs, manage alerts and draft reports; administrators can commit imports, amend rules and reset data. To enable local password protection, set `CEDAR_ADMIN_PASSWORD` and optionally separate `CEDAR_REVIEWER_PASSWORD`/`CEDAR_VIEWER_PASSWORD` before running `npm start`. These are shared demo roles, not production user accounts. Do not open a public port. Running from the repository root is required for relative fixture and database paths.
+The curl examples above apply to the default open synthetic demo. In protected mode, use the browser sign-in page (session cookie + CSRF header are required for writes). Viewer access is read-only; reviewers can stage CSVs, manage alerts and draft reports; administrators can commit imports, amend rules and reset data. To enable local password protection, set `CEDAR_ADMIN_PASSWORD` and optionally separate `CEDAR_REVIEWER_PASSWORD`/`CEDAR_VIEWER_PASSWORD` before running `npm start`. These are shared demo roles, not production user accounts. Alternatively configure `CEDAR_USERS_JSON` (example in `.env.example`) for named local accounts bound to existing organizations. Named logins attribute new audit events to the signed-in user; organization selection is server-derived, not client-controlled. Shared-role and named-account modes cannot be combined. Do not open a public port. Running from the repository root is required for relative fixture and database paths.
 
 ### Troubleshooting
 
@@ -27,3 +27,7 @@ The curl examples above apply to the default open synthetic demo. In protected m
 - Need a clean local run: stop the server and use `npm run seed -- --reset` (demo organization only), or use the UI's scoped reset. Do not delete an unknown SQLite database.
 - No source records counted: check `status=verified`, program mappings, event type, event date, and reporting period.
 - Import cannot publish: confirm expected row count and explicit quarantine review; invalid/partial rows are intentional in test files.
+
+### Source provenance and metric immutability
+
+Re-importing identical source bytes with the same `sourceAsOf` and `expectedRows` returns the original batch. Re-importing identical bytes while changing either metadata field returns HTTP 409; use a genuine new export rather than marking unchanged records as freshly reconciled. Existing metric-definition content, target versions, and reporting-window dates cannot be changed in place at the database layer; create a new reviewed version/amendment. The source export completeness claim still depends on an operator's stated expected count and is not proof from a live CRM.

@@ -1,6 +1,6 @@
 import crypto from 'node:crypto';
 import type {DB} from './db.ts';
-import {DEMO_ORG, now,uid,tx,audit,assertOrg} from './db.ts';
+import {currentOrg, now,uid,tx,audit,assertOrg} from './db.ts';
 import {HEADERS, csvParse, validateDate,validateRecord,countUnit,linearBaseline,dayOffset,VALID_EVENTS, type RecordInput, type CountingUnit} from './domain.ts';
 
 const hash=(s:string)=>crypto.createHash('sha256').update(s).digest('hex');
@@ -9,7 +9,7 @@ function fail(message:string,status=400):never {throw Object.assign(new Error(me
 function q(db:DB,query:string,...params:any[]):any[]{return db.prepare(query).all(...params) as any[];}
 function one(db:DB,query:string,...params:any[]):any{return db.prepare(query).get(...params);}
 
-export function stageImport(db:DB, input:{csv:string,sourceAsOf:string,expectedRows?:number,notes?:string},orgId=DEMO_ORG):any {
+export function stageImport(db:DB, input:{csv:string,sourceAsOf:string,expectedRows?:number,notes?:string},orgId=currentOrg()):any {
  const dataset=one(db,'SELECT * FROM source_datasets WHERE org_id=? AND adapter=?',orgId,'csv');
  if(!dataset)fail('CSV source not configured',404);
  if(!validateDate(input.sourceAsOf))fail('sourceAsOf must be ISO date YYYY-MM-DD');
@@ -21,7 +21,11 @@ export function stageImport(db:DB, input:{csv:string,sourceAsOf:string,expectedR
  if(!Number.isInteger(expected)||expected<rows.length||expected>100000)fail('Expected row count must be at least CSV rows and no more than 100,000');
  const checksum=hash(csv);
  const existing=one(db,'SELECT * FROM import_batches WHERE org_id=? AND source_dataset_id=? AND sha256=?',orgId,dataset.id,checksum);
- if(existing)return importDetail(db,existing.id,orgId);
+ if(existing){
+  if(existing.source_as_of!==input.sourceAsOf||existing.expected_rows!==expected)
+   fail('Identical source bytes already exist with different source date or expected row count; review the original import instead of relabeling its provenance',409);
+  return importDetail(db,existing.id,orgId);
+ }
  const mappings=q(db,'SELECT source_code,normalized_code FROM record_mappings WHERE org_id=? AND active=1',orgId);
  const knownCodes=new Set<string>(mappings.map((m:any)=>m.source_code));
  const norm=new Map<string,string>(mappings.map((m:any)=>[m.source_code,m.normalized_code]));
@@ -44,7 +48,7 @@ export function stageImport(db:DB, input:{csv:string,sourceAsOf:string,expectedR
  });
  return importDetail(db,id,orgId);
 }
-export function importDetail(db:DB,id:string,orgId=DEMO_ORG):any{
+export function importDetail(db:DB,id:string,orgId=currentOrg()):any{
  assertOrg(db,'import_batches',id,orgId);
  const batch=one(db,'SELECT * FROM import_batches WHERE id=? AND org_id=?',id,orgId);
  const issues=q(db,'SELECT row_number,external_id,program_code,issues_json,raw_json FROM program_records WHERE batch_id=? AND org_id=? AND is_valid=0 ORDER BY row_number LIMIT 50',id,orgId).map((r:any)=>({row:r.row_number,external_id:r.external_id,program_code:r.program_code,issues:JSON.parse(r.issues_json),raw:JSON.parse(r.raw_json)}));
@@ -57,7 +61,7 @@ function activeObligations(db:DB,orgId:string,asOf:string):any[]{
  AND ov.version=(SELECT MAX(o2.version) FROM obligation_versions o2 WHERE o2.obligation_key=ov.obligation_key AND o2.effective_on<=? AND o2.status='enabled')
  ORDER BY g.name,ov.obligation_key`,orgId,asOf,asOf,asOf,asOf);
 }
-export function previewMetric(db:DB,obligationKey:string,batchId:string,asOf:string,orgId=DEMO_ORG,includeDraft=false):any{
+export function previewMetric(db:DB,obligationKey:string,batchId:string,asOf:string,orgId=currentOrg(),includeDraft=false):any{
  assertOrg(db,'import_batches',batchId,orgId);
  let o=activeObligations(db,orgId,asOf).find((x:any)=>x.obligation_key===obligationKey);
  if(!o&&includeDraft){
@@ -85,7 +89,7 @@ export function previewMetric(db:DB,obligationKey:string,batchId:string,asOf:str
  for(const r of duplicates.slice(0,3))if(excluded.length<6)excluded.push({record:r.external_id,reason:['deduplicated_person']});
  return {obligation:o,achieved:result.count,target:o.target,baseline:linearBaseline(o.target,o.starts_on,o.ends_on,asOf),sourceCount:result.sourceCount,duplicates:result.duplicates,excludedCount:all.length-result.included.length,missingEvidence:missing.map(r=>r.external_id),included:counted.map(r=>({record_id:r.external_id,participant_id:r.participant_id,evidence_ref:r.evidence_ref||null,event_date:r.event_date})),excludedExamples:excluded};
 }
-export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolean,asOf?:string}={},orgId=DEMO_ORG):any{
+export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolean,asOf?:string}={},orgId=currentOrg()):any{
  const batch=importDetail(db,batchId,orgId);
  if(batch.status==='committed')return one(db,'SELECT * FROM calculation_snapshots WHERE batch_id=? AND org_id=? ORDER BY rowid DESC LIMIT 1',batchId,orgId);
  if(batch.status!=='staged')fail('Import is not staged',409);
@@ -147,7 +151,7 @@ function syncAlerts(db:DB,snapshotId:string,orgId:string):void{
   }
  }
 }
-export function alertAction(db:DB,id:string,action:string,input:{assignee?:string;until?:string;reason?:string}={},orgId=DEMO_ORG):any{
+export function alertAction(db:DB,id:string,action:string,input:{assignee?:string;until?:string;reason?:string}={},orgId=currentOrg()):any{
  assertOrg(db,'alerts',id,orgId);
  const a=one(db,'SELECT * FROM alerts WHERE id=?',id);let state=a.state;
  const assignee=input.assignee?.trim().slice(0,80)||a.assignee;
@@ -171,7 +175,7 @@ export function alertAction(db:DB,id:string,action:string,input:{assignee?:strin
   return one(db,'SELECT * FROM alerts WHERE id=?',id);
  });
 }
-export function createAmendment(db:DB,key:string,args:{target:number,effectiveOn:string,owner?:string},orgId=DEMO_ORG):any{
+export function createAmendment(db:DB,key:string,args:{target:number,effectiveOn:string,owner?:string},orgId=currentOrg()):any{
  if(!Number.isInteger(args.target)||args.target<0||args.target>1_000_000||!validateDate(args.effectiveOn))fail('Valid nonnegative target and effective date required');
  const current=q(db,`SELECT ov.*,g.org_id FROM obligation_versions ov JOIN grants g ON g.id=ov.grant_id WHERE ov.obligation_key=? AND g.org_id=? ORDER BY ov.version DESC LIMIT 1`,key,orgId)[0];
  if(!current)fail('Obligation not found',404);
@@ -183,14 +187,14 @@ export function createAmendment(db:DB,key:string,args:{target:number,effectiveOn
   return one(db,'SELECT * FROM obligation_versions WHERE id=?',id);
  });
 }
-export function snapshotDetail(db:DB,id:string,orgId=DEMO_ORG):any{
+export function snapshotDetail(db:DB,id:string,orgId=currentOrg()):any{
  assertOrg(db,'calculation_snapshots',id,orgId);
  const snapshot=one(db,'SELECT * FROM calculation_snapshots WHERE id=?',id);
  const totals=q(db,`SELECT st.*,ov.owner,ov.evidence_rule,m.unit,m.metric_key,g.name grant_name,g.funder,p.label period_label,p.report_due_on,p.starts_on,p.ends_on FROM snapshot_totals st
  JOIN obligation_versions ov ON st.obligation_version_id=ov.id JOIN grants g ON ov.grant_id=g.id JOIN grant_periods p ON ov.period_id=p.id JOIN metric_definition_versions m ON ov.metric_version_id=m.id WHERE st.snapshot_id=? ORDER BY g.name,st.obligation_key`,id);
  return {snapshot,totals:totals.map((t:any)=>({...t,included:JSON.parse(t.included_rows_json),excluded_examples:JSON.parse(t.excluded_examples_json),missing_evidence_refs:JSON.parse(t.missing_evidence_refs_json)}))};
 }
-export function reportDraft(db:DB,snapshotId:string,orgId=DEMO_ORG):any{
+export function reportDraft(db:DB,snapshotId:string,orgId=currentOrg()):any{
  const detail=snapshotDetail(db,snapshotId,orgId);
  const batch=one(db,'SELECT source_as_of,sha256,row_count,valid_count,issue_count FROM import_batches WHERE id=?',detail.snapshot.batch_id);
  const payload={kind:'DRAFT - NOT APPROVED OR SUBMITTED',organization:'Cedar Pathways (synthetic)',as_of:detail.snapshot.as_of,snapshot_timestamp:detail.snapshot.created_at,snapshot_id:snapshotId,source_sha256:detail.snapshot.source_hash,source_batch:detail.snapshot.batch_id,source_export_as_of:batch.source_as_of,source_rows:batch.row_count,quarantined_rows:batch.issue_count,metric_versions:JSON.parse(detail.snapshot.metric_versions_json),obligations:detail.totals.map((t:any)=>({key:t.obligation_key,grant:t.grant_name,period:t.period_label,metric:t.metric_key,counting_unit:t.unit,target:t.target,achieved:t.achieved,pacing_assumption:t.baseline,evidence_missing:t.missing_evidence_refs,records:t.included,exceptions:t.excluded_examples,definition_version:t.obligation_version_id}))};
@@ -199,12 +203,12 @@ export function reportDraft(db:DB,snapshotId:string,orgId=DEMO_ORG):any{
   audit(db,orgId,'report.drafted','report_draft',id,{snapshotId});return one(db,'SELECT * FROM report_drafts WHERE id=?',id);
  });
 }
-export function getReport(db:DB,id:string,orgId=DEMO_ORG):any{
+export function getReport(db:DB,id:string,orgId=currentOrg()):any{
  assertOrg(db,'report_drafts',id,orgId);
  const r=one(db,'SELECT * FROM report_drafts WHERE id=?',id);
  return {...r,contents:JSON.parse(r.contents_json)};
 }
-export function createGrantDraft(db:DB,input:{name:string;funder:string;programCode:string;owner:string;startsOn:string;endsOn:string;reportDueOn:string;unit:CountingUnit;eventType:string;target:number;needsEvidence:boolean},orgId=DEMO_ORG):any{
+export function createGrantDraft(db:DB,input:{name:string;funder:string;programCode:string;owner:string;startsOn:string;endsOn:string;reportDueOn:string;unit:CountingUnit;eventType:string;target:number;needsEvidence:boolean},orgId=currentOrg()):any{
  const name=String(input.name||'').trim().slice(0,100),funder=String(input.funder||'').trim().slice(0,100),owner=String(input.owner||'').trim().slice(0,80);
  const allowedUnits=['distinct_people','attendance_instances','enrollments','completions','placements'];
  if(!name||!funder||!owner)fail('Grant name, funder and owner are required');
@@ -222,13 +226,13 @@ export function createGrantDraft(db:DB,input:{name:string;funder:string;programC
   return {grantId:id,key,obligationVersionId:ob,status:'draft'};
  });
 }
-export function previewDraft(db:DB,key:string,batchId:string,asOf:string,orgId=DEMO_ORG):any{
+export function previewDraft(db:DB,key:string,batchId:string,asOf:string,orgId=currentOrg()):any{
  const result=previewMetric(db,key,batchId,asOf,orgId,true);
  if(result.obligation.status!=='draft')fail('Preview endpoint is only for draft definitions',409);
  audit(db,orgId,'config.previewed','obligation_version',result.obligation.id,{batchId,asOf,achieved:result.achieved,metricVersion:result.obligation.metric_version_id});
  return result;
 }
-export function enableDraft(db:DB,key:string,orgId=DEMO_ORG):any{
+export function enableDraft(db:DB,key:string,orgId=currentOrg()):any{
  const row=one(db,`SELECT ov.*,g.org_id,m.status metric_status FROM obligation_versions ov JOIN grants g ON ov.grant_id=g.id JOIN metric_definition_versions m ON ov.metric_version_id=m.id WHERE g.org_id=? AND ov.obligation_key=? ORDER BY ov.version DESC LIMIT 1`,orgId,key);
  if(!row)fail('Draft not found',404);
  if(row.status!=='draft'||row.metric_status!=='draft')fail('Only a draft metric may be enabled',409);
@@ -241,7 +245,7 @@ export function enableDraft(db:DB,key:string,orgId=DEMO_ORG):any{
   return {...row,status:'enabled',note:'Enabled configuration takes effect on the next published complete snapshot'};
  });
 }
-export function dashboard(db:DB,orgId=DEMO_ORG):any{
+export function dashboard(db:DB,orgId=currentOrg()):any{
  const snap=one(db,'SELECT * FROM calculation_snapshots WHERE org_id=? ORDER BY rowid DESC LIMIT 1',orgId);
  const grants=q(db,'SELECT * FROM grants WHERE org_id=? ORDER BY name',orgId);
  const datasets=q(db,'SELECT * FROM source_datasets WHERE org_id=?',orgId);
@@ -251,5 +255,5 @@ export function dashboard(db:DB,orgId=DEMO_ORG):any{
  const alerts=q(db,"SELECT * FROM alerts WHERE org_id=? ORDER BY CASE state WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END, created_at DESC",orgId);
  const auditTrail=q(db,'SELECT at,kind,entity_type,entity_id,details_json FROM audit_events WHERE org_id=? ORDER BY rowid DESC LIMIT 24',orgId);
  const snapshot=snap?snapshotDetail(db,snap.id,orgId):null;
- return {mappings,drafts,organization:{id:orgId,name:'Cedar Pathways · DEMO'},grants,alerts,imports,datasets,auditTrail,snapshot,reports:q(db,'SELECT id,snapshot_id,created_at,status FROM report_drafts WHERE org_id=? ORDER BY rowid DESC LIMIT 15',orgId),connection:{status:'demo_csv_only',crm:'Not connected',model:'Not enabled'}};
+ return {mappings,drafts,organization:{id:orgId,name:(one(db,'SELECT name FROM organizations WHERE id=?',orgId)?.name||'Unknown organization')+(orgId=== 'cedar-demo'?' · DEMO':'')},grants,alerts,imports,datasets,auditTrail,snapshot,reports:q(db,'SELECT id,snapshot_id,created_at,status FROM report_drafts WHERE org_id=? ORDER BY rowid DESC LIMIT 15',orgId),connection:{status:'demo_csv_only',crm:'Not connected',model:'Not enabled'}};
 }

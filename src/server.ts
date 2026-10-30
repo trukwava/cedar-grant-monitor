@@ -2,7 +2,7 @@ import http, {type IncomingMessage,type ServerResponse} from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
-import {openDB,DEMO_ORG} from './db.ts';
+import {openDB,DEMO_ORG,withIdentity} from './db.ts';
 import {reportCsv} from './domain.ts';
 import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
@@ -35,10 +35,13 @@ async function router(req:IncomingMessage,res:ServerResponse){
    if(origin&&origin!==`http://${req.headers.host}`)throw Object.assign(Error('Cross-origin write rejected'),{status:403});
    if(req.headers['sec-fetch-site']==='cross-site')throw Object.assign(Error('Cross-site write rejected'),{status:403});
    if(!['application/json','application/json; charset=utf-8'].includes(req.headers['content-type']||''))throw Object.assign(Error('Expected application/json'),{status:415});
-   if(url==='/api/auth/login'){const body=await parseJson(req);const result=authLogin(req,body.role,body.password);return send(res,200,{authenticated:true,role:result.role,csrfToken:result.csrfToken},undefined,{'Set-Cookie':result.cookie});}
+   if(url==='/api/auth/login'){const body=await parseJson(req);const result=authLogin(req,body.role,body.password,body.username);if(!db.prepare('SELECT id FROM organizations WHERE id=?').get(result.identity.orgId))throw Object.assign(Error('Account organization not configured'),{status:403});return send(res,200,{authenticated:true,role:result.identity.role,userId:result.identity.userId,orgId:result.identity.orgId,csrfToken:result.csrfToken},undefined,{'Set-Cookie':result.cookie});}
   }
   // The application shell has no private data; all API and fixture access is checked server-side.
-  if(url.startsWith('/api/')||url.startsWith('/fixtures/'))checkAccess(req,method,url);
+  const session=(url.startsWith('/api/')||url.startsWith('/fixtures/'))?checkAccess(req,method,url):null;
+  if(session&&!db.prepare('SELECT id FROM organizations WHERE id=?').get(session.orgId))throw Object.assign(Error('Account organization not configured'),{status:403});
+  return await withIdentity({actor:session?.userId||'anonymous',orgId:session?.orgId||DEMO_ORG},async()=>{
+  if(url.startsWith('/fixtures/')&&session?.orgId!==DEMO_ORG)throw Object.assign(Error('Demo fixture not available to this organization'),{status:404});
   if(method==='POST'&&url==='/api/auth/logout'){return send(res,200,{authenticated:false},undefined,{'Set-Cookie':authLogout(req)});}
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
@@ -75,6 +78,7 @@ async function router(req:IncomingMessage,res:ServerResponse){
    if(url==='/api/reports')return send(res,201,reportDraft(db,String(body.snapshotId||'')));
    if(match(url,/^\/api\/config\/obligations\/([\w-]+)\/amend$/))return send(res,201,createAmendment(db,match(url,/^\/api\/config\/obligations\/([\w-]+)\/amend$/)![0],{target:Number(body.target),effectiveOn:String(body.effectiveOn||''),owner:body.owner}));
    if(url==='/api/demo/reset'){
+    if(session?.orgId!==DEMO_ORG)throw Object.assign(Error('Demo reset is only available to the synthetic demo organization'),{status:403});
     if(body.confirm!=='RESET DEMO')throw Object.assign(Error('Type RESET DEMO to reset only the synthetic organization'),{status:400});
     resetDemo(db);seedDemo(db);return send(res,200,{ok:true,message:'Synthetic demo restored; other organizations unchanged.'});
    }
@@ -88,6 +92,7 @@ async function router(req:IncomingMessage,res:ServerResponse){
    const filename=path.basename(url);return send(res,200,fs.readFileSync(path.resolve('fixtures',filename),'utf8'),'text/csv; charset=utf-8');
   }
   return send(res,404,{error:'Not found'});
+  });
  }catch(e:any){console.error('Request error:',e?.message);if(!res.headersSent)send(res,e.status||500,{error:e.status?e.message:'Internal error; operation not completed'});}
 }
 export const server=http.createServer(router);
