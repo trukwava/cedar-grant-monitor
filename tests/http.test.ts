@@ -1,4 +1,5 @@
 import test from 'node:test';
+import {createHash} from 'node:crypto';
 import assert from 'node:assert/strict';
 import {mkdtempSync, rmSync} from 'node:fs';
 import os from 'node:os';
@@ -43,6 +44,18 @@ test('HTTP: immutable draft CSV reconciles to JSON; untrusted Host and Origin re
   const json=await call(port,'GET',`/api/reports/${reportId}/export`);
   const csv=await call(port,'GET',`/api/reports/${reportId}/export.csv`);
   assert.equal(json.status,200);assert.equal(csv.status,200);
+  const manifestResponse=await call(port,'GET',`/api/reports/${reportId}/manifest`);
+  assert.equal(manifestResponse.status,200);
+  const manifest=JSON.parse(manifestResponse.body);
+  assert.equal(manifest.schema,'cedar.report-export-manifest.v1');
+  const sha256=(value:string)=>createHash('sha256').update(value,'utf8').digest('hex');
+  assert.equal(manifest.exports.json.sha256,sha256(json.body));
+  assert.equal(manifest.exports.csv.sha256,sha256(csv.body));
+  assert.equal(manifest.exports.csv.bytes,Buffer.byteLength(csv.body));
+  assert.equal(manifest.snapshot_id,snapshotId);
+  assert.match(manifest.note,/not a digital signature/);
+  assert.equal((await call(port,'GET','/api/reports/not-a-report/manifest')).status,404);
+
   assert.match(String(csv.headers['content-type']),/^text\/csv/);
   assert.equal(csv.body.split('\n').filter(Boolean).length,13);
   assert.ok(csv.body.includes(snapshotId));
