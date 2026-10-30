@@ -1,0 +1,52 @@
+import { DatabaseSync } from 'node:sqlite';
+import fs from 'node:fs';
+import path from 'node:path';
+
+export const DEMO_ORG='cedar-demo';
+export const DEMO_USER='cedar-lead';
+export const DEFAULT_AS_OF='2026-10-29';
+export type DB = DatabaseSync;
+export function openDB(filename = process.env.DB_PATH || './data/cedar.sqlite'): DB {
+  if (filename !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(filename)), {recursive:true});
+  const db = new DatabaseSync(filename);
+  db.exec('PRAGMA foreign_keys=ON; PRAGMA journal_mode=WAL; PRAGMA busy_timeout=3000;');
+  migrate(db); return db;
+}
+export function tx<T>(db:DB, fn:()=>T):T {
+  db.exec('BEGIN IMMEDIATE');
+  try {const res=fn();db.exec('COMMIT');return res;} catch(e){db.exec('ROLLBACK');throw e;}
+}
+export function migrate(db:DB):void {
+ db.exec(`
+CREATE TABLE IF NOT EXISTS organizations(id TEXT PRIMARY KEY,name TEXT NOT NULL,is_demo INTEGER NOT NULL CHECK(is_demo IN (0,1)));
+CREATE TABLE IF NOT EXISTS users(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),display_name TEXT NOT NULL,role TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS grants(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),name TEXT NOT NULL,funder TEXT NOT NULL,program_code TEXT NOT NULL,owner TEXT NOT NULL,starts_on TEXT NOT NULL,ends_on TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS grant_periods(id TEXT PRIMARY KEY,grant_id TEXT NOT NULL REFERENCES grants(id),label TEXT NOT NULL,starts_on TEXT NOT NULL,ends_on TEXT NOT NULL,report_due_on TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS source_datasets(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),name TEXT NOT NULL,adapter TEXT NOT NULL CHECK(adapter IN ('csv','crm_readonly')),freshness_days INTEGER NOT NULL DEFAULT 10);
+CREATE TABLE IF NOT EXISTS record_mappings(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),source_code TEXT NOT NULL,normalized_code TEXT NOT NULL,version INTEGER NOT NULL DEFAULT 1,active INTEGER NOT NULL DEFAULT 1, UNIQUE(org_id,source_code,version));
+CREATE TABLE IF NOT EXISTS metric_definition_versions(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),metric_key TEXT NOT NULL,version INTEGER NOT NULL,unit TEXT NOT NULL CHECK(unit IN ('distinct_people','attendance_instances','enrollments','completions','placements')),event_type TEXT NOT NULL,program_code TEXT NOT NULL,needs_evidence INTEGER NOT NULL DEFAULT 0,source_mapping_json TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('draft','enabled','retired')),created_at TEXT NOT NULL,UNIQUE(org_id,metric_key,version));
+CREATE TABLE IF NOT EXISTS obligation_versions(id TEXT PRIMARY KEY,grant_id TEXT NOT NULL REFERENCES grants(id),period_id TEXT NOT NULL REFERENCES grant_periods(id),metric_version_id TEXT NOT NULL REFERENCES metric_definition_versions(id),obligation_key TEXT NOT NULL,version INTEGER NOT NULL,target INTEGER NOT NULL CHECK(target>=0),effective_on TEXT NOT NULL,owner TEXT NOT NULL,evidence_rule TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('draft','enabled','retired')),UNIQUE(obligation_key,version));
+CREATE TABLE IF NOT EXISTS import_batches(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),source_dataset_id TEXT NOT NULL REFERENCES source_datasets(id),sha256 TEXT NOT NULL,source_as_of TEXT NOT NULL,imported_at TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('staged','committed','rejected')),expected_rows INTEGER NOT NULL,row_count INTEGER NOT NULL,valid_count INTEGER NOT NULL,issue_count INTEGER NOT NULL,is_complete INTEGER NOT NULL CHECK(is_complete IN (0,1)),raw_csv TEXT NOT NULL,notes TEXT NOT NULL DEFAULT '',UNIQUE(org_id,source_dataset_id,sha256));
+CREATE TABLE IF NOT EXISTS program_records(id TEXT PRIMARY KEY,batch_id TEXT NOT NULL REFERENCES import_batches(id),org_id TEXT NOT NULL REFERENCES organizations(id),row_number INTEGER NOT NULL,external_id TEXT NOT NULL,participant_id TEXT NOT NULL,program_code TEXT NOT NULL,event_type TEXT NOT NULL,event_date TEXT NOT NULL,status TEXT NOT NULL,evidence_ref TEXT NOT NULL,raw_json TEXT NOT NULL,normalized_json TEXT NOT NULL,issues_json TEXT NOT NULL,is_valid INTEGER NOT NULL CHECK(is_valid IN (0,1)),UNIQUE(batch_id,row_number));
+CREATE TABLE IF NOT EXISTS calculation_snapshots(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),batch_id TEXT NOT NULL REFERENCES import_batches(id),as_of TEXT NOT NULL,created_at TEXT NOT NULL,source_hash TEXT NOT NULL,metric_versions_json TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('published','superseded')),UNIQUE(batch_id,as_of,metric_versions_json));
+CREATE TABLE IF NOT EXISTS snapshot_totals(id TEXT PRIMARY KEY,snapshot_id TEXT NOT NULL REFERENCES calculation_snapshots(id),obligation_version_id TEXT NOT NULL REFERENCES obligation_versions(id),obligation_key TEXT NOT NULL,achieved INTEGER NOT NULL,target INTEGER NOT NULL,baseline REAL NOT NULL,source_count INTEGER NOT NULL,excluded_count INTEGER NOT NULL,missing_evidence_count INTEGER NOT NULL,included_rows_json TEXT NOT NULL,excluded_examples_json TEXT NOT NULL,missing_evidence_refs_json TEXT NOT NULL,UNIQUE(snapshot_id,obligation_key));
+CREATE TABLE IF NOT EXISTS alerts(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),obligation_key TEXT NOT NULL,snapshot_id TEXT NOT NULL REFERENCES calculation_snapshots(id),kind TEXT NOT NULL,trigger_hash TEXT NOT NULL,state TEXT NOT NULL CHECK(state IN ('open','acknowledged','snoozed','resolved')),severity TEXT NOT NULL,explanation TEXT NOT NULL,assignee TEXT NOT NULL DEFAULT '',snoozed_until TEXT,snooze_reason TEXT,created_at TEXT NOT NULL,updated_at TEXT NOT NULL,UNIQUE(org_id,obligation_key,kind,trigger_hash));
+CREATE TABLE IF NOT EXISTS assignments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),alert_id TEXT NOT NULL REFERENCES alerts(id),assignee TEXT NOT NULL,assigned_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS report_drafts(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),snapshot_id TEXT NOT NULL REFERENCES calculation_snapshots(id),created_at TEXT NOT NULL,status TEXT NOT NULL CHECK(status IN ('draft','accepted','rejected')),contents_json TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS audit_events(id TEXT PRIMARY KEY,org_id TEXT NOT NULL REFERENCES organizations(id),actor TEXT NOT NULL,at TEXT NOT NULL,kind TEXT NOT NULL,entity_type TEXT NOT NULL,entity_id TEXT NOT NULL,details_json TEXT NOT NULL);
+CREATE TRIGGER IF NOT EXISTS prevent_source_mutation BEFORE UPDATE OF sha256,source_as_of,expected_rows,row_count,valid_count,issue_count,is_complete,raw_csv ON import_batches BEGIN SELECT RAISE(ABORT,'Import contents are immutable'); END;
+CREATE TRIGGER IF NOT EXISTS prevent_record_mutation BEFORE UPDATE ON program_records BEGIN SELECT RAISE(ABORT,'Program records are immutable'); END;
+CREATE INDEX IF NOT EXISTS idx_records_batch ON program_records(batch_id,is_valid,event_type,event_date);
+CREATE INDEX IF NOT EXISTS idx_snapshots_org ON calculation_snapshots(org_id,created_at);
+CREATE INDEX IF NOT EXISTS idx_alerts_org ON alerts(org_id,state);
+`);
+}
+export function assertOrg(db:DB, entityTable:'grants'|'alerts'|'report_drafts'|'import_batches'|'calculation_snapshots', entityId:string, orgId:string):void {
+ const found = db.prepare(`SELECT id FROM ${entityTable} WHERE id=? AND org_id=?`).get(entityId,orgId);
+ if(!found) throw Object.assign(new Error('Not found in current organization'),{status:404});
+}
+export const now = ()=>new Date().toISOString();
+export const uid = (p:string)=>p+'-'+crypto.randomUUID().slice(0,12);
+export function audit(db:DB, orgId:string, kind:string, entityType:string, entityId:string, details:object={},actor=DEMO_USER):void {
+ db.prepare('INSERT INTO audit_events VALUES(?,?,?,?,?,?,?,?)').run(uid('aud'),orgId,actor,now(),kind,entityType,entityId,JSON.stringify(details));
+}

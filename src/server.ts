@@ -1,0 +1,86 @@
+import http, {type IncomingMessage,type ServerResponse} from 'node:http';
+import fs from 'node:fs';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {openDB,DEMO_ORG} from './db.ts';
+import {reportCsv} from './domain.ts';
+import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
+import {dashboard,stageImport,commitImport,importDetail,snapshotDetail,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
+const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
+const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
+const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
+if(!['127.0.0.1','localhost'].includes(host))throw Error('Cedar demo must bind to a loopback host only');
+if(!Number.isInteger(port)||port<1||port>65535)throw Error('PORT must be a valid TCP port');
+const csp="default-src 'self'; img-src 'self' data:; style-src 'self'; script-src 'self'; connect-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'";
+function send(res:ServerResponse,status:number,body:string|object,contentType='application/json; charset=utf-8'){
+ res.writeHead(status,{'Content-Type':contentType,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':csp,'Referrer-Policy':'no-referrer'});
+ res.end(typeof body==='string'?body:JSON.stringify(body));
+}
+function parseJson(req:IncomingMessage):Promise<any>{return new Promise((resolve,reject)=>{
+ let size=0;const chunks:Buffer[]=[];
+ req.on('data',chunk=>{size+=chunk.length;if(size>2_100_000){reject(Object.assign(Error('Request exceeds 2.1MB'),{status:413}));req.destroy();return;}chunks.push(chunk);});
+ req.on('end',()=>{try{const text=Buffer.concat(chunks).toString('utf8');resolve(text?JSON.parse(text):{});}catch{reject(Object.assign(Error('Invalid JSON'),{status:400}));}});
+ req.on('error',reject);
+});}
+function match(url:string,re:RegExp):string[]|null {const m=url.match(re);return m?m.slice(1).map(decodeURIComponent):null;}
+async function router(req:IncomingMessage,res:ServerResponse){
+ const u=new URL(req.url||'/',`http://${host}:${port}`),url=u.pathname,method=req.method||'GET';
+ try{
+  if(!new Set([`${host}:${port}`,`127.0.0.1:${port}`,`localhost:${port}`]).has(req.headers.host||''))throw Object.assign(Error('Host not permitted for local demo'),{status:403});
+  if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
+  if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
+  if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)$/))return send(res,200,snapshotDetail(db,match(url,/^\/api\/snapshots\/([\w-]+)$/)![0]));
+  if(method==='GET'&&match(url,/^\/api\/preview\/([\w-]+)$/)){
+   const key=match(url,/^\/api\/preview\/([\w-]+)$/)![0],batch=u.searchParams.get('batch'),asOf=u.searchParams.get('asOf')||'2026-10-29';
+   if(!batch)throw Object.assign(Error('Missing batch query parameter'),{status:400});
+   return send(res,200,previewMetric(db,key,batch,asOf));
+  }
+  if(method==='GET'&&match(url,/^\/api\/reports\/([\w-]+)\/export\.csv$/)){
+   const report=getReport(db,match(url,/^\/api\/reports\/([\w-]+)\/export\.csv$/)![0]);
+   res.writeHead(200,{'Content-Type':'text/csv; charset=utf-8','Content-Disposition':`attachment; filename="cedar-draft-${report.id}.csv"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff','Content-Security-Policy':csp});
+   return res.end(reportCsv(report));
+  }
+  if(method==='GET'&&match(url,/^\/api\/reports\/([\w-]+)\/export$/)){
+   const report=getReport(db,match(url,/^\/api\/reports\/([\w-]+)\/export$/)![0]);
+   res.writeHead(200,{'Content-Type':'application/json; charset=utf-8','Content-Disposition':`attachment; filename="cedar-draft-${report.id}.json"`,'Cache-Control':'no-store','X-Content-Type-Options':'nosniff'});
+   return res.end(JSON.stringify(report.contents,null,2));
+  }
+  if(method==='GET'&&match(url,/^\/api\/reports\/([\w-]+)$/))return send(res,200,getReport(db,match(url,/^\/api\/reports\/([\w-]+)$/)![0]));
+  if(method==='POST'){
+   if(!['application/json','application/json; charset=utf-8'].includes(req.headers['content-type']||''))throw Object.assign(Error('Expected application/json'),{status:415});
+   // Same-origin local demo only; requests from unrelated web origins are never authorized.
+   const origin=req.headers.origin;
+   if(origin && origin!==`http://${host}:${port}`)throw Object.assign(Error('Cross-origin write rejected'),{status:403});
+   const body=await parseJson(req);
+   if(url==='/api/imports/stage')return send(res,201,stageImport(db,{csv:String(body.csv||''),sourceAsOf:String(body.sourceAsOf||''),expectedRows:body.expectedRows,notes:body.notes}));
+   if(match(url,/^\/api\/imports\/([\w-]+)\/commit$/))return send(res,201,commitImport(db,match(url,/^\/api\/imports\/([\w-]+)\/commit$/)![0],{acceptQuarantine:body.acceptQuarantine===true,asOf:body.asOf}));
+   if(match(url,/^\/api\/alerts\/([\w-]+)\/(acknowledge|assign|snooze|resolve)$/)){
+    const [id,action]=match(url,/^\/api\/alerts\/([\w-]+)\/(acknowledge|assign|snooze|resolve)$/)!;
+    return send(res,200,alertAction(db,id,action,body));
+   }
+   if(url==='/api/config/grants')return send(res,201,createGrantDraft(db,{name:body.name,funder:body.funder,programCode:body.programCode,owner:body.owner,startsOn:body.startsOn,endsOn:body.endsOn,reportDueOn:body.reportDueOn,unit:body.unit,eventType:body.eventType,target:Number(body.target),needsEvidence:body.needsEvidence===true}));
+   if(url==='/api/config/preview')return send(res,200,previewDraft(db,String(body.key||''),String(body.batchId||''),String(body.asOf||'')));
+   if(match(url,/^\/api\/config\/obligations\/([\w-]+)\/enable$/))return send(res,200,enableDraft(db,match(url,/^\/api\/config\/obligations\/([\w-]+)\/enable$/)![0]));
+   if(url==='/api/reports')return send(res,201,reportDraft(db,String(body.snapshotId||'')));
+   if(match(url,/^\/api\/config\/obligations\/([\w-]+)\/amend$/))return send(res,201,createAmendment(db,match(url,/^\/api\/config\/obligations\/([\w-]+)\/amend$/)![0],{target:Number(body.target),effectiveOn:String(body.effectiveOn||''),owner:body.owner}));
+   if(url==='/api/demo/reset'){
+    if(body.confirm!=='RESET DEMO')throw Object.assign(Error('Type RESET DEMO to reset only the synthetic organization'),{status:400});
+    resetDemo(db);seedDemo(db);return send(res,200,{ok:true,message:'Synthetic demo restored; other organizations unchanged.'});
+   }
+  }
+  if(method==='GET' && ['/','/index.html','/app.js','/styles.css'].includes(url)){
+   const file=path.join(root,url==='/'?'index.html':url.slice(1));
+   const type=url.endsWith('.js')?'text/javascript; charset=utf-8':url.endsWith('.css')?'text/css; charset=utf-8':'text/html; charset=utf-8';
+   return send(res,200,fs.readFileSync(file,'utf8'),type);
+  }
+  if(method==='GET'&&match(url,/^\/fixtures\/(program_export_120|partial_export_35_of_120|late_arrival_full_export_121|spring_completed_period_40)\.csv$/)){
+   const filename=path.basename(url);return send(res,200,fs.readFileSync(path.resolve('fixtures',filename),'utf8'),'text/csv; charset=utf-8');
+  }
+  return send(res,404,{error:'Not found'});
+ }catch(e:any){console.error('Request error:',e?.message);if(!res.headersSent)send(res,e.status||500,{error:e.status?e.message:'Internal error; operation not completed'});}
+}
+export const server=http.createServer(router);
+if(import.meta.url===new URL('file://'+process.argv[1]).href){
+ server.listen(port,host,()=>console.log(`Cedar Pathways demo running at http://${host}:${port} (local only)`));
+ const shutdown=()=>{server.close();db.close();};process.on('SIGINT',shutdown);process.on('SIGTERM',shutdown);
+}
