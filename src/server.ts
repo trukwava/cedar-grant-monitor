@@ -1,4 +1,5 @@
 import http, {type IncomingMessage,type ServerResponse} from 'node:http';
+import {createHash} from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import {fileURLToPath} from 'node:url';
@@ -66,6 +67,16 @@ async function router(req:IncomingMessage,res:ServerResponse){
    const key=match(url,/^\/api\/preview\/([\w-]+)$/)![0],batch=u.searchParams.get('batch'),asOf=u.searchParams.get('asOf')||'2026-10-29';
    if(!batch)throw Object.assign(Error('Missing batch query parameter'),{status:400});
    return send(res,200,previewMetric(db,key,batch,asOf));
+  }
+  if(method==='GET'&&match(url,/^\/api\/reports\/([\w-]+)\/manifest$/)){
+   const report=getReport(db,match(url,/^\/api\/reports\/([\w-]+)\/manifest$/)![0]);
+   const json=JSON.stringify(report.contents,null,2);
+   const csv=reportCsv(report);
+   const digest=(value:string)=>createHash('sha256').update(value,'utf8').digest('hex');
+   return send(res,200,{schema:'cedar.report-export-manifest.v1',report_id:report.id,
+    snapshot_id:report.contents.snapshot_id,as_of:report.contents.as_of,
+    exports:{json:{sha256:digest(json),bytes:Buffer.byteLength(json)},csv:{sha256:digest(csv),bytes:Buffer.byteLength(csv)}},
+    note:'Checksums verify exported bytes only; this manifest is not a digital signature or independent proof of data authenticity.'});
   }
   if(method==='GET'&&match(url,/^\/api\/reports\/([\w-]+)\/export\.csv$/)){
    const report=getReport(db,match(url,/^\/api\/reports\/([\w-]+)\/export\.csv$/)![0]);
