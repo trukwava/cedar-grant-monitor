@@ -129,3 +129,7 @@ CI runs these tests on Node 22; a green CI run is **not** a security or regulato
 Source: https://github.com/trukwava/cedar-grant-monitor
 
 Public code is not a public service. The demo is local-only, unauthenticated and uses synthetic data; never deploy it to the internet or import private records.
+
+## Offline export integrity manifests
+
+For each draft report, `GET /api/reports/{id}/manifest` returns SHA-256 checksums and UTF-8 byte lengths for the exact `export` JSON and `export.csv` downloads. A reviewer can compare downloaded bytes to the manifest to detect accidental modification or mismatched exports. This is **not** a digital signature, does not authenticate the server, and is not proof that upstream source data is correct.
