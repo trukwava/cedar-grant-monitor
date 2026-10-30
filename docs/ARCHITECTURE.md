@@ -35,3 +35,9 @@ Alert calculations are deterministic rules. Linear pacing is simply `(elapsed in
 ## P0 versus parking lot
 
 **P0 demonstrated:** import staging, provenance, frozen metric counts, portfolio, evidence refs, alerts, amendments, draft exports, synthetic scenario, automated tests. **Parking lot:** SSO, production CRM adapters, live reconciliation, email alerts, task workflow integrations, richer reporting formats, AI-assisted narrative drafting, predictive modeling, funder portal submission, participant intake, billing. Do not treat any parked item as already implemented.
+
+## Read-only CRM adapter seam (v0.6)
+
+`src/adapters.ts` defines `ReadOnlyCRMAdapter` and a typed `ReadOnlyExport` envelope. `DisconnectedCRMAdapter` fails explicitly, and `FixtureCRMAdapter` exposes deterministic synthetic full, partial and late-outcome exports. A separate `crm_readonly` source dataset marks the fixture's provenance, while `stageCRMFixture` feeds the exact same transactional import validation as manual CSV. Only the Cedar synthetic organization can call the HTTP fixture endpoint. Source connection state is pinned into new reporting drafts, not inferred from the adapter enum.
+
+This is not a Salesforce or other CRM connector; it performs no outbound requests and has no service credentials. A real provider would need approved field mappings, pagination and export-completeness verification, response-size caps, incremental-source reconciliation, server-side secret management, provider auth scopes, audit requirements, and independent integration tests before any private records could be used.

@@ -29,11 +29,17 @@ export function resetDemo(db:DB):void {
 }
 export function seedDemo(db:DB,{reset=false}:{reset?:boolean}={}):void {
  if(reset)resetDemo(db);
- if(db.prepare('SELECT id FROM organizations WHERE id=?').get(DEMO_ORG))return;
+ if(db.prepare('SELECT id FROM organizations WHERE id=?').get(DEMO_ORG)){
+  // Idempotent opt-in migration for existing v0.5 demo databases.
+  if(!db.prepare('SELECT id FROM source_datasets WHERE id=? AND org_id=?').get('source-crm-readonly-fixture',DEMO_ORG))
+   db.prepare('INSERT INTO source_datasets VALUES(?,?,?,?,?)').run('source-crm-readonly-fixture',DEMO_ORG,'Simulated CRM read-only export (not connected)','crm_readonly',10);
+  return;
+ }
  tx(db,()=>{
   db.prepare('INSERT INTO organizations VALUES(?,?,?)').run(DEMO_ORG,'Cedar Pathways',1);
   db.prepare('INSERT INTO users VALUES(?,?,?,?)').run(DEMO_USER,DEMO_ORG,'Demo Grants Lead','admin');
   db.prepare('INSERT INTO source_datasets VALUES(?,?,?,?,?)').run('source-crm-csv',DEMO_ORG,'Program activity export','csv',10);
+  db.prepare('INSERT INTO source_datasets VALUES(?,?,?,?,?)').run('source-crm-readonly-fixture',DEMO_ORG,'Simulated CRM read-only export (not connected)','crm_readonly',10);
   for(const code of SOURCE_CODES)db.prepare('INSERT INTO record_mappings VALUES(?,?,?,?,?,?)').run('map-'+code,DEMO_ORG,code,code,1,1);
   for(const g of GRANTS){
    db.prepare('INSERT INTO grants VALUES(?,?,?,?,?,?,?,?)').run(g.id,DEMO_ORG,g.name,g.funder,g.program_code,g.owner,'2026-04-01','2026-12-13');

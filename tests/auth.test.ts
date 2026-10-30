@@ -118,8 +118,12 @@ test('named identities are org-bound, do not leak demo reports, and appear in au
   assert.equal(p.snapshot,null);
   assert.equal((await call(port,'GET',`/api/snapshots/${d.snapshot.snapshot.id}`,undefined,{Cookie:partner.cookie})).status,404);
   assert.equal((await call(port,'GET','/fixtures/program_export_120.csv',undefined,{Cookie:partner.cookie})).status,404);
+  assert.equal((await call(port,'POST','/api/adapters/fixture/stage',{kind:'full'},{Cookie:partner.cookie,'X-Cedar-CSRF':partner.csrf})).status,403);
+  assert.equal((await call(port,'POST','/api/adapters/fixture/stage',{kind:'full'},{Cookie:viewer.cookie,'X-Cedar-CSRF':viewer.csrf})).status,403);
   assert.equal((await call(port,'POST','/api/demo/reset',{confirm:'RESET DEMO'},{Cookie:partner.cookie,'X-Cedar-CSRF':partner.csrf})).status,403);
   assert.equal((await call(port,'POST','/api/reports',{snapshotId:d.snapshot.snapshot.id},{Cookie:viewer.cookie,'X-Cedar-CSRF':viewer.csrf})).status,403);
+  const staged=await call(port,'POST','/api/adapters/fixture/stage',{kind:'full'},{Cookie:demo.cookie,'X-Cedar-CSRF':demo.csrf});
+  assert.equal(staged.status,201);assert.equal(staged.json.source_adapter,'crm_readonly');
   const draft=await call(port,'POST','/api/reports',{snapshotId:d.snapshot.snapshot.id},{Cookie:demo.cookie,'X-Cedar-CSRF':demo.csrf});
   assert.equal(draft.status,201);
   assert.equal((await call(port,'GET',`/api/reports/${draft.json.id}`,undefined,{Cookie:partner.cookie})).status,404);

@@ -55,6 +55,7 @@ export function reportCsv(report:{contents:any}):string {
  const source=report.contents;
  const base={report_status:source.kind,as_of:source.as_of,snapshot_timestamp:source.snapshot_timestamp,
   snapshot_id:source.snapshot_id,source_sha256:source.source_sha256,source_batch:source.source_batch,
+  source_dataset:source.source_dataset?String(source.source_dataset).replace(/^[\s]*[=+@-]/,"'$&"):'' ,source_adapter:source.source_adapter||'csv',source_connection:source.source_connection||'UNVERIFIED',
   source_export_as_of:source.source_export_as_of,source_rows:source.source_rows,
   quarantined_rows:source.quarantined_rows};
  const spreadsheetText=(v:unknown):string=>{

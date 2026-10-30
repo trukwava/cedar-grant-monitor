@@ -99,7 +99,7 @@ export function checkAccess(req:IncomingMessage,method:string,url:string):Sessio
  }
  if(url==='/api/auth/logout')return session;
  const adminOnly=url==='/api/demo/reset'||url.startsWith('/api/config/')||/^\/api\/imports\/[\w-]+\/commit$/.test(url);
- const minRole:Role=adminOnly?'admin':url==='/api/imports/stage'||url==='/api/reports'||/^\/api\/alerts\//.test(url)?'reviewer':'admin';
+ const minRole:Role=adminOnly?'admin':(url==='/api/imports/stage'||url==='/api/adapters/fixture/stage')||url==='/api/reports'||/^\/api\/alerts\//.test(url)?'reviewer':'admin';
  if(names.indexOf(session.role)<names.indexOf(minRole))throw Object.assign(Error('Role not permitted for this operation'),{status:403});
  return session;
 }

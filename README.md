@@ -29,7 +29,7 @@ A nonprofit **grants lead** wants to know whether each funder obligation is genu
 
 The smallest complete workflow is:
 
-**CSV export → staged quality checks → explicit approval of quarantined rows → immutable import → version-pinned calculation → portfolio and evidence review → explainable alert → draft report export.**
+**CSV export or simulated read-only CRM fixture → staged quality checks → explicit approval of quarantined rows → immutable import → version-pinned calculation → portfolio and evidence review → explainable alert → draft report export.**
 
 The interface contains six screens: **Portfolio, Obligations, Data imports, Alerts, Report drafts, and Configuration.**
 
@@ -53,8 +53,8 @@ The optional modes are mutually exclusive. Named credentials are salted and chec
 | Capability | Implementation |
 | --- | --- |
 | Demo portfolio | Six synthetic grants, 12 active autumn obligations, three dated windows per grant and a completed spring replay |
-| Source data | 120-row primary CSV, 35-row partial export, late-arrival 121-row export, and completed-period fixture |
-| Import quality | Exact field mapping; invalid IDs/dates, duplicate source identifiers, unrecognized program codes, incomplete exports, and quarantined rows |
+| Source data | 120-row primary CSV, 35-row partial export, late-arrival 121-row export, and completed-period fixture; separately identified read-only **simulated** CRM fixture |
+| Import quality | Exact field mapping; invalid IDs/dates, duplicate source identifiers, unrecognized program codes, incomplete exports, and quarantined rows. Both CSV and simulated CRM use the same staging rules |
 | Counting rules | Distinct-person and event-based metrics with inclusion/exclusion examples; only verified records count |
 | Immutable history | Source bytes, individual records, versioned metrics/targets and calculation snapshots persist in SQLite |
 | Performance signals | Date-only reporting deadlines, missing evidence, stale exports, and linear pacing **heuristics** with explanations |
@@ -69,9 +69,15 @@ The optional modes are mutually exclusive. Named credentials are salted and chec
 
 ### Current limitations
 
-This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, including optional named-account credentials and tenant-scoped HTTP routing, but they do not constitute production-ready identity or multi-tenant security. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default; Cedar is the only automatically provisioned organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no production CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
+This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, including optional named-account credentials and tenant-scoped HTTP routing, but they do not constitute production-ready identity or multi-tenant security. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default; Cedar is the only automatically provisioned organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no live CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
 
 The CSV completeness flag depends on the supplied expected row count; a misleading source export can still look complete. For a pilot, reconcile against authoritative CRM export totals and a reviewed metric dictionary. See [architecture](docs/ARCHITECTURE.md), [operator guide](docs/OPERATIONS.md), [security boundary](docs/SECURITY.md), and [pilot plan](docs/PILOT.md).
+
+## Simulated read-only CRM boundary (v0.6)
+
+The **Data imports** screen now offers three clearly labeled synthetic read-only CRM fixtures: complete export (120 rows), partial export (35/120; cannot publish), and late-arriving outcome export (121 rows). They exercise the same server-side CSV validation and immutable staging pipeline used by manual uploads, but use their own `crm_readonly` source dataset. The provider interface in `src/adapters.ts` includes a deliberately unconfigured production adapter, which returns an explicit error instead of pretending a connection exists.
+
+`GET /api/adapters/status` reports `disconnected`; `POST /api/adapters/fixture/stage` stages only deterministic synthetic records and requires reviewer-level access. It cannot contact a CRM, write to one, or accept arbitrary provider URLs or credentials. Every report draft identifies the source, adapter and connection state in both JSON and CSV. **No external service is connected or tested.**
 
 ## Sample CSV contract
 

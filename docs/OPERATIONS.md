@@ -31,3 +31,7 @@ The curl examples above apply to the default open synthetic demo. In protected m
 ### Source provenance and metric immutability
 
 Re-importing identical source bytes with the same `sourceAsOf` and `expectedRows` returns the original batch. Re-importing identical bytes while changing either metadata field returns HTTP 409; use a genuine new export rather than marking unchanged records as freshly reconciled. Existing metric-definition content, target versions, and reporting-window dates cannot be changed in place at the database layer; create a new reviewed version/amendment. The source export completeness claim still depends on an operator's stated expected count and is not proof from a live CRM.
+
+### Simulated CRM export demonstration
+
+Open **Data imports** and use **Stage full fixture** (120 rows), **Stage partial fixture** (35 of 120) or **Stage late outcome** (121 rows). The simulated source is separate from the CSV upload source. Review the staged result and confirm that the partial fixture cannot be published and the full fixture requires acceptance of quarantined rows. Draft reports from committed fixture batches say `SIMULATED - NOT CONNECTED` in both CSV and JSON. `GET /api/adapters/status` reports the production CRM as disconnected. No network request or actual CRM integration is performed.

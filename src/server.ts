@@ -4,9 +4,10 @@ import path from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {openDB,DEMO_ORG,withIdentity} from './db.ts';
 import {reportCsv} from './domain.ts';
+import {crmConnectionStatus,FixtureCRMAdapter} from './adapters.ts';
 import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
-import {dashboard,stageImport,commitImport,importDetail,snapshotDetail,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
+import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
 const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
@@ -43,6 +44,7 @@ async function router(req:IncomingMessage,res:ServerResponse){
   return await withIdentity({actor:session?.userId||'anonymous',orgId:session?.orgId||DEMO_ORG},async()=>{
   if(url.startsWith('/fixtures/')&&session?.orgId!==DEMO_ORG)throw Object.assign(Error('Demo fixture not available to this organization'),{status:404});
   if(method==='POST'&&url==='/api/auth/logout'){return send(res,200,{authenticated:false},undefined,{'Set-Cookie':authLogout(req)});}
+  if(method==='GET'&&url==='/api/adapters/status')return send(res,200,crmConnectionStatus());
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)$/))return send(res,200,snapshotDetail(db,match(url,/^\/api\/snapshots\/([\w-]+)$/)![0]));
@@ -66,6 +68,13 @@ async function router(req:IncomingMessage,res:ServerResponse){
    if(!['application/json','application/json; charset=utf-8'].includes(req.headers['content-type']||''))throw Object.assign(Error('Expected application/json'),{status:415});
    // Same-origin local demo only; requests from unrelated web origins are never authorized.
    const body=await parseJson(req);
+   if(url==='/api/adapters/fixture/stage'){
+    if(session?.orgId!==DEMO_ORG)throw Object.assign(Error('Fixture adapter is Cedar demo only'),{status:403});
+    const kind=body.kind;
+    if(!['full','partial','late'].includes(kind))throw Object.assign(Error('Unknown synthetic fixture'),{status:400});
+    const exported=await new FixtureCRMAdapter().readFullExport(kind);
+    return send(res,201,stageCRMFixture(db,exported));
+   }
    if(url==='/api/imports/stage')return send(res,201,stageImport(db,{csv:String(body.csv||''),sourceAsOf:String(body.sourceAsOf||''),expectedRows:body.expectedRows,notes:body.notes}));
    if(match(url,/^\/api\/imports\/([\w-]+)\/commit$/))return send(res,201,commitImport(db,match(url,/^\/api\/imports\/([\w-]+)\/commit$/)![0],{acceptQuarantine:body.acceptQuarantine===true,asOf:body.asOf}));
    if(match(url,/^\/api\/alerts\/([\w-]+)\/(acknowledge|assign|snooze|resolve)$/)){
