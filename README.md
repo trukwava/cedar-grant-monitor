@@ -56,10 +56,10 @@ The optional modes are mutually exclusive. Named credentials are salted and chec
 | Source data | 120-row primary CSV, 35-row partial export, late-arrival 121-row export, and completed-period fixture; separately identified read-only **simulated** CRM fixture |
 | Import quality | Exact field mapping; invalid IDs/dates, duplicate source identifiers, unrecognized program codes, incomplete exports, and quarantined rows. Both CSV and simulated CRM use the same staging rules |
 | Counting rules | Distinct-person and event-based metrics with inclusion/exclusion examples; only verified records count |
-| Immutable history | Source bytes, individual records, versioned metrics/targets and calculation snapshots persist in SQLite |
+| Immutable history | Source bytes, individual records, versioned metrics/targets, calculation snapshots, report contents and audit event fields are guarded against in-place edits |
 | Performance signals | Date-only reporting deadlines, missing evidence, stale exports, and linear pacing **heuristics** with explanations |
 | Operations | Acknowledge, assign, snooze with reason, resolve under documented conditions; audit events |
-| Reporting | JSON and CSV **draft** exports with as-of date, source hash, versions, counts, exceptions, and evidence references; no external submission |
+| Reporting | JSON and CSV **draft** exports with as-of date, source hash, versions, counts, exceptions, and evidence references; verified pinned snapshot required before creating a new draft |
 | Rule review | Preview before enabling a new draft definition; effective-dated target amendments |
 | Demo recovery | Repeatable fixtures and scoped reset |
 | Optional local access control | Role-password or named-account sign-in; server-derived organization and actor, viewer/reviewer/admin HTTP permissions, CSRF and origin checks |
@@ -72,6 +72,14 @@ The optional modes are mutually exclusive. Named credentials are salted and chec
 This is **local-only**. Optional password sessions and role checks now exist at the HTTP boundary, including optional named-account credentials and tenant-scoped HTTP routing, but they do not constitute production-ready identity or multi-tenant security. With no password configured, the demo is intentionally unauthenticated. The server binds to `127.0.0.1` by default; Cedar is the only automatically provisioned organization. The application must not be publicly hosted, connected to production exports or used to submit reports without a full authentication and security review. It has no live CRM adapter, live source validation, predictive accuracy claims, or external approval workflow. There is no AI inference in the count path.
 
 The CSV completeness flag depends on the supplied expected row count; a misleading source export can still look complete. For a pilot, reconcile against authoritative CRM export totals and a reviewed metric dictionary. See [architecture](docs/ARCHITECTURE.md), [operator guide](docs/OPERATIONS.md), [security boundary](docs/SECURITY.md), and [pilot plan](docs/PILOT.md).
+
+## Historical snapshot verification (v0.7)
+
+The **Verify snapshot** action in the portfolio calls `GET /api/snapshots/:id/verify`. It recalculates counts using the exact historical obligation and metric versions referenced by that snapshot, even if newer amendments or retired rules exist. The verifier also checks the original CSV SHA-256, the source row count, every preserved raw and normalized record, the pinned metric versions, the included/excluded evidence references, and the frozen totals. The endpoint is read-only and organization-scoped.
+
+If any verification fails, the application refuses to create a new report draft from that snapshot. Existing reports remain frozen. SQLite now blocks in-place changes to stored snapshot results, frozen report contents, and audit event fields. These checks detect accidental corruption, but **are not tamper-proof against a database administrator who can replace the database and all associated evidence**; independent external signatures and secure audit retention are beyond this demo.
+
+Malformed CSV quoting returns a clear validation error rather than silently moving fields, and oversized HTTP JSON requests return HTTP 413 without terminating the server. See [verification](docs/VERIFICATION.md).
 
 ## Simulated read-only CRM boundary (v0.6)
 
@@ -112,7 +120,7 @@ There is no generative-AI-driven rules engine: metric definitions, source mappin
 npm test
 ```
 
-Tests cover the local sign-in boundary (unauthenticated GETs, role authorization, CSRF and origin rejection, logout), the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, database-enforced cross-organization reference rejection, legacy-data preflight, data immutability, and scoped reset.
+Tests include the pinned historical snapshot verification, raw-versus-normalized source reconciliation, immutable totals/reports/audit fields, strict CSV quoting, HTTP 413 error recovery and the local sign-in boundary (unauthenticated GETs, role authorization, CSRF and origin rejection, logout), the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, database-enforced cross-organization reference rejection, legacy-data preflight, data immutability, and scoped reset.
 
 CI runs these tests on Node 22; a green CI run is **not** a security or regulatory certification. Browser automation was blocked by the execution environment and is still pending; see [verification log](docs/VERIFICATION.md).
 

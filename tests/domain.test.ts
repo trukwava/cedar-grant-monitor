@@ -29,3 +29,21 @@ test('CSV report is pinned to draft fields and guards against formula injection'
  assert.ok(csv.includes("'=HYPERLINK"));
  assert.match(csv,/,40,23,20,1,e1,2,r1;r2,1,/);
 });
+
+test('strict CSV parser rejects junk after quote and in-cell quotes instead of silently changing values',()=>{
+ for(const bad of [
+  'a,b\n"x"junk,z\n',
+  'a,b\nx"y",z\n',
+  'a,b\n"unclosed,z\n',
+  'a,b\n"x" "y",z\n',
+ ]){
+  assert.throws(()=>csvParse(bad),{status:400});
+ }
+ assert.deepEqual(csvParse('a,b\r\n"x,y","q"\r\n'),[['a','b'],['x,y','q']]);
+ assert.deepEqual(csvParse('a,b\n"x\r\ny",ok\n'),[['a','b'],['x\r\ny','ok']]);
+});
+
+test('CSV export prefixes a spreadsheet-dangerous dataset label',()=>{
+ const csv=reportCsv({contents:{kind:'DRAFT',as_of:'2026-10-29',snapshot_timestamp:'2026-10-29T00:00:00Z',snapshot_id:'s1',source_sha256:'hash',source_batch:'b1',source_dataset:'=RUN(1)',source_connection:'LOCAL CSV',source_export_as_of:'2026-10-29',source_rows:1,quarantined_rows:0,obligations:[{key:'key',grant:'grant',period:'Autumn',metric:'test',counting_unit:'placements',definition_version:'v1',target:40,achieved:23,pacing_assumption:20,evidence_missing:[],records:[],exceptions:[]}]}});
+ assert.ok(csv.includes("'=RUN(1)"));
+});

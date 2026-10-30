@@ -7,7 +7,7 @@ import {reportCsv} from './domain.ts';
 import {crmConnectionStatus,FixtureCRMAdapter} from './adapters.ts';
 import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
-import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
+import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,verifySnapshot,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
 const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
@@ -19,10 +19,23 @@ function send(res:ServerResponse,status:number,body:string|object,contentType='a
  res.end(typeof body==='string'?body:JSON.stringify(body));
 }
 function parseJson(req:IncomingMessage):Promise<any>{return new Promise((resolve,reject)=>{
- let size=0;const chunks:Buffer[]=[];
- req.on('data',chunk=>{size+=chunk.length;if(size>2_100_000){reject(Object.assign(Error('Request exceeds 2.1MB'),{status:413}));req.destroy();return;}chunks.push(chunk);});
- req.on('end',()=>{try{const text=Buffer.concat(chunks).toString('utf8');resolve(text?JSON.parse(text):{});}catch{reject(Object.assign(Error('Invalid JSON'),{status:400}));}});
- req.on('error',reject);
+ let size=0,settled=false;const chunks:Buffer[]=[];
+ req.on('data',chunk=>{
+  if(settled)return;
+  size+=chunk.length;
+  if(size>2_100_000){
+   settled=true;chunks.length=0;
+   // Respond 413 rather than destroying the socket and hiding the failure.
+   reject(Object.assign(Error('Request exceeds 2.1MB'),{status:413}));
+   req.resume();return;
+  }
+  chunks.push(chunk);
+ });
+ req.on('end',()=>{if(settled)return;settled=true;
+  try{const text=Buffer.concat(chunks).toString('utf8');resolve(text?JSON.parse(text):{});}
+  catch{reject(Object.assign(Error('Invalid JSON'),{status:400}));}
+ });
+ req.on('error',e=>{if(!settled){settled=true;reject(e);}});
 });}
 function match(url:string,re:RegExp):string[]|null {const m=url.match(re);return m?m.slice(1).map(decodeURIComponent):null;}
 async function router(req:IncomingMessage,res:ServerResponse){
@@ -47,6 +60,7 @@ async function router(req:IncomingMessage,res:ServerResponse){
   if(method==='GET'&&url==='/api/adapters/status')return send(res,200,crmConnectionStatus());
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
+  if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)\/verify$/))return send(res,200,verifySnapshot(db,match(url,/^\/api\/snapshots\/([\w-]+)\/verify$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)$/))return send(res,200,snapshotDetail(db,match(url,/^\/api\/snapshots\/([\w-]+)$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/preview\/([\w-]+)$/)){
    const key=match(url,/^\/api\/preview\/([\w-]+)$/)![0],batch=u.searchParams.get('batch'),asOf=u.searchParams.get('asOf')||'2026-10-29';

@@ -34,6 +34,9 @@ test('HTTP: immutable draft CSV reconciles to JSON; untrusted Host and Origin re
   assert.equal(ready,true,'server should start '+stderr.slice(0,500));
   const bootstrap=JSON.parse((await call(port,'GET','/api/bootstrap')).body);
   assert.equal(bootstrap.grants.length,6);
+  const historicalVerify=await call(port,'GET',`/api/snapshots/${bootstrap.snapshot.snapshot.id}/verify`);
+  assert.equal(historicalVerify.status,200);
+  assert.equal(JSON.parse(historicalVerify.body).verified,true);
   const snapshotId=bootstrap.snapshot.snapshot.id;
   const created=await call(port,'POST','/api/reports',{snapshotId});assert.equal(created.status,201);
   const reportId=JSON.parse(created.body).id;
@@ -49,5 +52,10 @@ test('HTTP: immutable draft CSV reconciles to JSON; untrusted Host and Origin re
   for(const obligation of draft.obligations){assert.ok(csv.body.includes(obligation.definition_version));}
   assert.equal((await call(port,'GET','/api/bootstrap',undefined,{Host:'attacker.example'})).status,403);
   assert.equal((await call(port,'POST','/api/reports',{snapshotId},{Origin:'https://attacker.example'})).status,403);
+  const invalid=await call(port,'POST','/api/imports/stage',{csv:'external_id,participant_id,program_code,event_type,event_date,status,evidence_ref\n\"r1\"junk,P1,CP-JOBS,placement,2026-10-29,verified,EV1',sourceAsOf:'2026-10-29',expectedRows:1});
+  assert.equal(invalid.status,400);assert.match(invalid.body,/Malformed CSV quoting/);
+  const oversized=await call(port,'POST','/api/imports/stage',{csv:'x'.repeat(2_100_200),sourceAsOf:'2026-10-29'});
+  assert.equal(oversized.status,413);
+  assert.equal((await call(port,'GET','/api/bootstrap')).status,200);
  }finally{child.kill('SIGTERM');rmSync(dir,{recursive:true,force:true});}
 });

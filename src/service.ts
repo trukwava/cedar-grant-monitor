@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import type {DB} from './db.ts';
 import {currentOrg, now,uid,tx,audit,assertOrg} from './db.ts';
-import {writeCsv,HEADERS, csvParse, validateDate,validateRecord,countUnit,linearBaseline,dayOffset,VALID_EVENTS, type RecordInput, type CountingUnit} from './domain.ts';
+import {HEADERS, csvParse, validateDate,validateRecord,countUnit,linearBaseline,dayOffset,VALID_EVENTS, type RecordInput, type CountingUnit} from './domain.ts';
 
 const hash=(s:string)=>crypto.createHash('sha256').update(s).digest('hex');
 const json=(x:unknown)=>JSON.stringify(x);
@@ -81,6 +81,11 @@ export function previewMetric(db:DB,obligationKey:string,batchId:string,asOf:str
    WHERE g.org_id=? AND ov.obligation_key=? AND ov.status='draft' AND m.status='draft' AND p.starts_on<=? AND p.ends_on>=? ORDER BY ov.version DESC LIMIT 1`,orgId,obligationKey,asOf,asOf);
  }
  if(!o)fail('No active or requested draft obligation at this as-of date',404);
+ return evaluatePinnedMetric(db,o,batchId,asOf,orgId);
+}
+/** The pinned evaluator accepts a historical definition without requiring that
+ * it remain the currently enabled obligation. */
+function evaluatePinnedMetric(db:DB,o:any,batchId:string,asOf:string,orgId:string):any {
  const all=q(db,'SELECT * FROM program_records WHERE batch_id=? AND org_id=? ORDER BY row_number',batchId,orgId);
  const qualifying:RecordInput[]=[],excluded:any[]=[];
  for(const r of all){const reason:string[]=[];
@@ -100,6 +105,7 @@ export function previewMetric(db:DB,obligationKey:string,batchId:string,asOf:str
  for(const r of duplicates.slice(0,3))if(excluded.length<6)excluded.push({record:r.external_id,reason:['deduplicated_person']});
  return {obligation:o,achieved:result.count,target:o.target,baseline:linearBaseline(o.target,o.starts_on,o.ends_on,asOf),sourceCount:result.sourceCount,duplicates:result.duplicates,excludedCount:all.length-result.included.length,missingEvidence:missing.map(r=>r.external_id),included:counted.map(r=>({record_id:r.external_id,participant_id:r.participant_id,evidence_ref:r.evidence_ref||null,event_date:r.event_date})),excludedExamples:excluded};
 }
+
 export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolean,asOf?:string}={},orgId=currentOrg()):any{
  const batch=importDetail(db,batchId,orgId);
  if(batch.status==='committed')return one(db,'SELECT * FROM calculation_snapshots WHERE batch_id=? AND org_id=? ORDER BY rowid DESC LIMIT 1',batchId,orgId);
@@ -205,7 +211,57 @@ export function snapshotDetail(db:DB,id:string,orgId=currentOrg()):any{
  JOIN obligation_versions ov ON st.obligation_version_id=ov.id JOIN grants g ON ov.grant_id=g.id JOIN grant_periods p ON ov.period_id=p.id JOIN metric_definition_versions m ON ov.metric_version_id=m.id WHERE st.snapshot_id=? ORDER BY g.name,st.obligation_key`,id);
  return {snapshot,totals:totals.map((t:any)=>({...t,included:JSON.parse(t.included_rows_json),excluded_examples:JSON.parse(t.excluded_examples_json),missing_evidence_refs:JSON.parse(t.missing_evidence_refs_json)}))};
 }
+/** Recompute a frozen snapshot against its original batch and pinned versions.
+ * Does not consult current enabled definitions or mutate any report state. */
+export function verifySnapshot(db:DB,snapshotId:string,orgId=currentOrg()):any{
+ const detail=snapshotDetail(db,snapshotId,orgId);
+ const batch=one(db,'SELECT * FROM import_batches WHERE id=? AND org_id=?',detail.snapshot.batch_id,orgId);
+ if(!batch)fail('Original source batch is unavailable',409);
+ const checksumMatches=hash(batch.raw_csv)===batch.sha256&&batch.sha256===detail.snapshot.source_hash;
+ const storedRows=q(db,'SELECT row_number,raw_json,normalized_json,external_id,participant_id,program_code,event_type,event_date,status,evidence_ref FROM program_records WHERE batch_id=? AND org_id=? ORDER BY row_number',batch.id,orgId);
+ const sourceRowCountMatches=storedRows.length===batch.row_count;
+ let sourceRowsMatchOriginal=false,normalizedRowsMatchPersisted=false;
+ try{
+  const csvRows=csvParse(batch.raw_csv);
+  sourceRowsMatchOriginal=csvRows.length===storedRows.length+1&&csvRows[0].join(',')===HEADERS.join(',')&&
+   storedRows.every((r:any,i:number)=>{
+    if(r.row_number!==i+2)return false;
+    const raw=Object.fromEntries(HEADERS.map((h,j)=>[h,csvRows[i+1][j]??'']));
+    return csvRows[i+1].length===HEADERS.length&&JSON.stringify(raw)===r.raw_json;
+   });
+  normalizedRowsMatchPersisted=storedRows.every((r:any)=>{
+   const normalized=JSON.parse(r.normalized_json);
+   return HEADERS.every(h=>normalized[h]===r[h]);
+  });
+ }catch{/* A corrupted CSV or malformed row is an integrity failure, not a successful verification. */}
+ const pinned=JSON.parse(detail.snapshot.metric_versions_json) as Array<{obligation:string;version:number;target:number;metric:string;metricVersion:number}>;
+ const results=detail.totals.map((stored:any)=>{
+  const o=one(db,`SELECT ov.*,g.org_id,g.name grant_name,p.label period_label,p.starts_on,p.ends_on,p.report_due_on,
+   m.unit,m.event_type,m.program_code metric_program,m.needs_evidence,m.version metric_version,m.metric_key
+   FROM obligation_versions ov JOIN grants g ON ov.grant_id=g.id
+   JOIN grant_periods p ON p.id=ov.period_id JOIN metric_definition_versions m ON m.id=ov.metric_version_id
+   WHERE ov.id=? AND g.org_id=?`,stored.obligation_version_id,orgId);
+  if(!o)return {key:stored.obligation_key,verified:false,error:'Pinned definition unavailable'};
+  const recalculated=evaluatePinnedMetric(db,o,batch.id,detail.snapshot.as_of,orgId);
+  const version=pinned.find(x=>x.obligation===stored.obligation_key);
+  const matches=o.obligation_key===stored.obligation_key&&Boolean(version&&version.version===o.version&&version.target===o.target&&version.metric===o.metric_version_id&&version.metricVersion===o.metric_version)
+   && recalculated.achieved===stored.achieved&&recalculated.target===stored.target&&
+   recalculated.baseline===stored.baseline&&recalculated.sourceCount===stored.source_count&&
+   recalculated.excludedCount===stored.excluded_count&&recalculated.missingEvidence.length===stored.missing_evidence_count&&
+   JSON.stringify(recalculated.included)===JSON.stringify(stored.included)&&
+   JSON.stringify(recalculated.missingEvidence)===JSON.stringify(stored.missing_evidence_refs)&&
+   JSON.stringify(recalculated.excludedExamples)===JSON.stringify(stored.excluded_examples);
+  return {key:stored.obligation_key,verified:matches,achieved:recalculated.achieved,storedAchieved:stored.achieved,
+   pinnedVersion:o.id,sourceCount:recalculated.sourceCount};
+ });
+ const definitionsComplete=results.length===pinned.length&&pinned.every(x=>results.some(y=>y.key===x.obligation));
+ return {snapshotId,asOf:detail.snapshot.as_of,checksumMatches,sourceRowCountMatches,sourceRowsMatchOriginal,normalizedRowsMatchPersisted,
+  definitionsComplete,verified:checksumMatches&&sourceRowCountMatches&&sourceRowsMatchOriginal&&normalizedRowsMatchPersisted&&definitionsComplete&&results.every(x=>x.verified),
+  obligations:results};
+}
+
 export function reportDraft(db:DB,snapshotId:string,orgId=currentOrg()):any{
+ if(!verifySnapshot(db,snapshotId,orgId).verified)fail('Source or definition verification failed; report draft blocked',409);
  const detail=snapshotDetail(db,snapshotId,orgId);
  const batch=one(db,`SELECT b.source_as_of,b.sha256,b.row_count,b.valid_count,b.issue_count,s.name source_dataset_name,s.adapter source_adapter
  FROM import_batches b JOIN source_datasets s ON s.id=b.source_dataset_id WHERE b.id=? AND b.org_id=?`,detail.snapshot.batch_id,orgId);

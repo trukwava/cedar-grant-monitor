@@ -10,19 +10,38 @@ export function linearBaseline(target:number,start:string,end:string,asOf:string
  const elapsed=Math.max(0,Math.min(inclusiveDays(start,end),dayOffset(asOf,start)+1));
  return Math.round((target*elapsed/inclusiveDays(start,end))*100)/100;
 }
+/** Strict RFC-style CSV parser with explicit quoted-field closure. CSV is
+ * untrusted; malformed quoting cannot silently shift metric source columns. */
 export function csvParse(text:string):string[][] {
- if(text.length>2_000_000)throw Object.assign(new Error('CSV exceeds 2MB limit'),{status:413});
- const rows:string[][]=[];let row:string[]=[],cell='',quoted=false;
+ if(text.length>2_000_000)throw Object.assign(Error('CSV exceeds 2MB limit'),{status:413});
+ const rows:string[][]=[];
+ let row:string[]=[],cell='',state:'start'|'unquoted'|'quoted'|'afterQuote'='start';
+ const invalid=():never=>{throw Object.assign(Error('Malformed CSV quoting'),{status:400});};
+ const cellDone=()=>{row.push(state==='quoted'||state==='afterQuote'?cell:cell.replace(/\r$/,''));cell='';state='start';};
+ const rowDone=()=>{if(row.some(x=>x!=='')){rows.push(row);if(rows.length>10000)throw Object.assign(Error('CSV exceeds 10,000 rows'),{status:413});}row=[];};
  for(let i=0;i<text.length;i++){
-  const c=text[i]; if(quoted){ if(c==='"'&&text[i+1]==='"'){cell+='"';i++;}else if(c==='"')quoted=false;else cell+=c;}
-  else if(c==='"') {if(cell!=='')throw Error('Malformed CSV quote');quoted=true;}
-  else if(c===','){row.push(cell);cell='';}
-  else if(c==='\n'){row.push(cell.replace(/\r$/,''));if(row.some(x=>x!==''))rows.push(row);row=[];cell='';}
-  else cell+=c;
+  const c=text[i];
+  if(state==='quoted'){
+   if(c==='"'){
+    if(text[i+1]==='"'){cell+='"';i++;}else state='afterQuote';
+   }else cell+=c;
+   continue;
+  }
+  if(state==='afterQuote'){
+   if(c===',' ){cellDone();continue;}
+   if(c==='\n'){cellDone();rowDone();continue;}
+   if(c==='\r'&&(text[i+1]==='\n'||i===text.length-1))continue;
+   invalid();
+  }
+  if(c==='"'){
+   if(state!=='start')invalid();
+   state='quoted';
+  }else if(c===',')cellDone();
+  else if(c==='\n'){cellDone();rowDone();}
+  else {cell+=c;state='unquoted';}
  }
- if(quoted)throw Error('Unclosed CSV quote');
- row.push(cell.replace(/\r$/,''));if(row.some(x=>x!==''))rows.push(row);
- if(rows.length>10001)throw Object.assign(new Error('CSV exceeds 10,000 rows'),{status:413});
+ if(state==='quoted')throw Object.assign(Error('Unclosed CSV quote'),{status:400});
+ if(row.length||cell!==''||state==='afterQuote'){cellDone();rowDone();}
  return rows;
 }
 export function csvEscape(s:unknown):string { const str=String(s??'');return /[",\r\n]/.test(str)?'"'+str.replace(/"/g,'""')+'"':str; }

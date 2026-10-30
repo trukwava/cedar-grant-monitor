@@ -31,3 +31,9 @@ CSV replay checks include content hash, source export date and expected row coun
 ## v0.6 provider boundary
 
 The fixture endpoint is a deterministic local read-only source: it cannot fetch private records or transmit data to an external CRM. It is available only to Cedar's demo organization and reviewer/admin role. `DisconnectedCRMAdapter` throws an explicit unavailable error. Report exports label simulated-source provenance. The `crm_readonly` dataset type must **not** be interpreted as evidence of an active provider connection. A real connector requires separate authorization and security review; no credentials should be added to this repository.
+
+## v0.7 verification and ingestion
+
+Report draft creation checks snapshot/source consistency before storing a new frozen report. Independent recomputation can catch alterations to counted records, raw rows, normalized copies, definition pins, or stored totals. Audits, reports and snapshots reject in-place field updates in ordinary SQLite writes. This is not a cryptographic audit log, database encryption, or protection against a malicious host administrator.
+
+Malformed CSV quotes are rejected explicitly; request bodies exceeding 2.1MB receive HTTP 413. Production deployment would still require separate load testing, streaming ingestion, secure upload storage, DoS mitigations and a reviewed retention/deletion policy.

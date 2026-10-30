@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openDB,DEMO_ORG,migrate} from '../src/db.ts';
 import {seedDemo,resetDemo} from '../src/seed.ts';
-import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail} from '../src/service.ts';
+import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail,verifySnapshot} from '../src/service.ts';
 import {partialCsv,lateArrivalCsv,sampleCsv} from '../src/fixtures.ts';
 function setup(){const db=openDB(':memory:');seedDemo(db);return db;}
 function throws(fn:()=>any,pattern:RegExp){assert.throws(fn,pattern);}
@@ -146,7 +146,7 @@ test('SQLite rejects cross-organization relationships on INSERT and UPDATE, even
  db.prepare(`INSERT INTO calculation_snapshots SELECT 'partner-snap','partner-org','partner-batch',as_of,created_at,source_hash,metric_versions_json,status FROM calculation_snapshots WHERE id=?`).run(snapshot.id);
  throws(()=>db.prepare(`INSERT INTO snapshot_totals SELECT 'x-total','partner-snap',obligation_version_id,obligation_key,achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id),/Cross-organization reference rejected/);
  throws(()=>db.prepare('UPDATE report_drafts SET org_id=? WHERE id=?').run('partner-org',report.id),/Cross-organization reference rejected/);
- throws(()=>db.prepare('UPDATE calculation_snapshots SET batch_id=? WHERE id=?').run('partner-batch',snapshot.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('UPDATE calculation_snapshots SET batch_id=? WHERE id=?').run('partner-batch',snapshot.id),/(Cross-organization reference rejected|Historical definition fields are immutable)/);
  throws(()=>db.prepare('UPDATE obligation_versions SET metric_version_id=? WHERE id=?').run('partner-metric',obligation.id),/(Cross-organization reference rejected|Historical definition fields are immutable)/);
  db.prepare(`INSERT INTO snapshot_totals SELECT 'partner-total','partner-snap','partner-ob','partner-placements',achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id);
  assert.equal((db.prepare("SELECT COUNT(*) n FROM snapshot_totals WHERE snapshot_id='partner-snap'").get() as any).n,1);
@@ -202,5 +202,51 @@ test('versioned rules and parent organization ownership are immutable at databas
  // Status promotion is still allowed, which preserves the versioned draft workflow.
  db.prepare('UPDATE metric_definition_versions SET status=? WHERE id=?').run('draft',metric.id);
  assert.equal((db.prepare('SELECT status FROM metric_definition_versions WHERE id=?').get(metric.id) as any).status,'draft');
+ db.close();
+});
+
+test('historical snapshot verification recomputes pinned definitions after later amendments or retirement',()=>{
+ const db=setup();
+ const snapshot=(dashboard(db).snapshot as any).snapshot;
+ const baseline=verifySnapshot(db,snapshot.id);
+ assert.equal(baseline.verified,true);assert.equal(baseline.obligations.length,12);
+ assert.equal(baseline.checksumMatches,true);assert.equal(baseline.sourceRowCountMatches,true);
+ assert.equal(baseline.sourceRowsMatchOriginal,true);assert.equal(baseline.normalizedRowsMatchPersisted,true);
+ createAmendment(db,'jobs-placements',{target:41,effectiveOn:'2026-11-01'});
+ db.prepare("UPDATE metric_definition_versions SET status='retired' WHERE id=?").run('metric-jobs-placements-v1');
+ assert.equal(verifySnapshot(db,snapshot.id).verified,true);
+ db.close();
+});
+
+test('snapshot verifier detects altered stored source rows and blocks an unverified draft',()=>{
+ const db=setup();
+ const snapshot=(dashboard(db).snapshot as any).snapshot;
+ assert.equal(verifySnapshot(db,snapshot.id).verified,true);
+ const before=(db.prepare("SELECT COUNT(*) n FROM report_drafts WHERE snapshot_id=?").get(snapshot.id) as any).n;
+ // Simulate an administrator bypassing the database triggers, as the verifier
+ // is intended to detect corruption even when SQL protections are disabled.
+ db.exec('DROP TRIGGER prevent_record_mutation');
+ db.prepare("UPDATE program_records SET participant_id=? WHERE id=(SELECT id FROM program_records WHERE batch_id=? AND program_code='CP-JOBS' AND event_type='placement' AND is_valid=1 LIMIT 1)")
+  .run('ALTERED_PERSON',snapshot.batch_id);
+ const altered=verifySnapshot(db,snapshot.id);
+ assert.equal(altered.verified,false);assert.equal(altered.checksumMatches,true);
+ assert.ok(altered.obligations.some((x:any)=>!x.verified));
+ assert.throws(()=>reportDraft(db,snapshot.id),/verification failed/);
+ assert.equal((db.prepare('SELECT COUNT(*) n FROM report_drafts WHERE snapshot_id=?').get(snapshot.id) as any).n,before);
+ db.close();
+});
+
+
+test('historical snapshots, totals, reports and audit-event contents cannot be changed in place',()=>{
+ const db=setup();const snapshot=(dashboard(db).snapshot as any).snapshot;
+ const total=(db.prepare('SELECT id FROM snapshot_totals WHERE snapshot_id=? LIMIT 1').get(snapshot.id) as any).id;
+ const report=reportDraft(db,snapshot.id);
+ const event=(db.prepare("SELECT id FROM audit_events WHERE kind='report.drafted' ORDER BY rowid DESC LIMIT 1").get() as any).id;
+ const reject=/Historical definition fields are immutable/;
+ throws(()=>db.prepare('UPDATE calculation_snapshots SET as_of=? WHERE id=?').run('2026-12-31',snapshot.id),reject);
+ throws(()=>db.prepare('UPDATE snapshot_totals SET achieved=achieved+1 WHERE id=?').run(total),reject);
+ throws(()=>db.prepare('UPDATE report_drafts SET contents_json=? WHERE id=?').run('{}',report.id),reject);
+ throws(()=>db.prepare('UPDATE audit_events SET actor=? WHERE id=?').run('spoofed',event),reject);
+ assert.equal(verifySnapshot(db,snapshot.id).verified,true);
  db.close();
 });

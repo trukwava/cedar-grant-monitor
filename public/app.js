@@ -40,7 +40,7 @@ function quality(){const batch=(data?.imports||[]).find(i=>i.status==='committed
 function renderOverview(){const totals=getTotals(),alerts=activeAlerts(),batch=quality(),snap=selectedSnapshot();let grants=data.grants||[];
  const covered=new Set(totals.filter(t=>t.achieved>=t.baseline).map(t=>t.obligation_key));
  const grouped=grants.map(g=>({...g,totals:totals.filter(t=>t.grant_name===g.name)}));
- return heading('Grant operations','Portfolio overview','Evidence-backed delivery across active funder obligations',button('+ Import program data','data-nav="imports"','primary')+button('Draft report','data-create-report'))+
+ return heading('Grant operations','Portfolio overview','Evidence-backed delivery across active funder obligations',button('+ Import program data','data-nav="imports"','primary')+button('Draft report','data-create-report')+button('Verify snapshot','data-verify-snapshot'))+
  `<div class="callout"><span style="font-size:18px">◈</span><div><strong>Calculations are reproducible.</strong> Counts use one immutable, committed CSV batch and approved versioned metric definitions. No AI-generated outcomes, no connected CRM.</div></div>`+
  `<section class="stats" aria-label="Portfolio summary"><div class="stat"><small>Active grants</small><div class="num">${grants.length}</div><div class="note">Across ${totals.length} obligations</div></div><div class="stat"><small>Obligations on assumed pace</small><div class="num">${covered.size}<span class="mark">/ ${totals.length}</span></div><div class="note">Linear baseline, not a forecast</div></div><div class="stat"><small>Unresolved alerts</small><div class="num">${alerts.length}<span class="mark amber">● Needs review</span></div><div class="note">Acknowledgement does not resolve</div></div><div class="stat"><small>Last complete import</small><div class="num" style="font-size:20px">${batch?dt(batch.source_as_of):'None'}</div><div class="note">${batch?batch.valid_count+'/'+batch.row_count+' usable records':'Awaiting source data'}</div></div></section>`+
  (batch?.issue_count?`<div class="callout amber"><span>⚠</span><div><strong>${batch.issue_count} quarantined rows</strong> in the published source batch; exclusions are visible in import staging and record-level previews. ${button('Review import','data-import="'+esc(batch.id)+'"','small')}</div></div>`:'')+
@@ -91,9 +91,10 @@ async function showPreview(key){const t=getTotals().find(x=>x.obligation_key===k
  out.scrollIntoView({behavior:'smooth',block:'center'});
  }catch(e){out.innerHTML=`<div class="callout red">${esc(e.message)}</div>`;}}
 function getField(id){return document.getElementById(id)?.value||'';}
-async function handleClick(event){const el=event.target.closest('button[data-nav],button[data-back],button[data-obligation],button[data-import],button[data-report],button[data-preview],button[data-commit],button[data-alert-action],button[data-create-report],button[data-reset],button[data-amend],button[data-retry],button[data-stage-fixture]');if(!el)return;
+async function handleClick(event){const el=event.target.closest('button[data-nav],button[data-back],button[data-obligation],button[data-import],button[data-report],button[data-preview],button[data-commit],button[data-alert-action],button[data-create-report],button[data-reset],button[data-amend],button[data-retry],button[data-stage-fixture],button[data-verify-snapshot]');if(!el)return;
  try{
  if(el.dataset.stageFixture){const r=await post('/api/adapters/fixture/stage',{kind:el.dataset.stageFixture});toast('Simulated CRM fixture staged; no external connection');await load();return showImport(r.id);}
+ if(el.hasAttribute('data-verify-snapshot')){if(!selectedSnapshot())throw Error('No published snapshot');const r=await endpoint('/api/snapshots/'+selectedSnapshot().id+'/verify');toast(r.verified?'Snapshot fully reproduced from source and pinned versions':'Snapshot verification failed: review data and definitions',!r.verified);return;}
  if(el.dataset.nav)return openView(el.dataset.nav);
  if(el.dataset.back)return openView(el.dataset.back);
  if(el.dataset.obligation)return showObligation(el.dataset.obligation);

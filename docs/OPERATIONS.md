@@ -35,3 +35,13 @@ Re-importing identical source bytes with the same `sourceAsOf` and `expectedRows
 ### Simulated CRM export demonstration
 
 Open **Data imports** and use **Stage full fixture** (120 rows), **Stage partial fixture** (35 of 120) or **Stage late outcome** (121 rows). The simulated source is separate from the CSV upload source. Review the staged result and confirm that the partial fixture cannot be published and the full fixture requires acceptance of quarantined rows. Draft reports from committed fixture batches say `SIMULATED - NOT CONNECTED` in both CSV and JSON. `GET /api/adapters/status` reports the production CRM as disconnected. No network request or actual CRM integration is performed.
+
+### Verify a historical snapshot (v0.7)
+
+On **Portfolio**, select **Verify snapshot**. This fetches a read-only recomputation using the source batch, original field mapping, persisted record values and pinned definition versions recorded in that snapshot. The API equivalent is:
+
+```bash
+curl -s http://127.0.0.1:4173/api/snapshots/SNAPSHOT_ID/verify
+```
+
+In protected mode, a signed-in viewer may inspect verification results. The response separates source SHA-256, raw CSV-row reconciliation, normalized-record reconciliation, definition completeness and each obligation result. A failed check blocks generating a **new** reporting draft but does not rewrite an existing draft. If an import fails with `Malformed CSV quoting`, repair the original CSV and stage it as a new file; do not repair the immutable stored batch. Oversized request bodies return HTTP 413; reduce the file or split exports under the documented limits.

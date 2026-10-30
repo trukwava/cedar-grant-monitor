@@ -91,6 +91,10 @@ function installImmutableDefinitionGuards(db:DB):void {
   metric_definition_versions:'org_id, metric_key, version, unit, event_type, program_code, needs_evidence, source_mapping_json, created_at',
   obligation_versions:'grant_id, period_id, metric_version_id, obligation_key, version, target, effective_on, owner, evidence_rule',
   grant_periods:'grant_id, label, starts_on, ends_on, report_due_on',
+  calculation_snapshots:'org_id, batch_id, as_of, created_at, source_hash, metric_versions_json',
+  snapshot_totals:'snapshot_id, obligation_version_id, obligation_key, achieved, target, baseline, source_count, excluded_count, missing_evidence_count, included_rows_json, excluded_examples_json, missing_evidence_refs_json',
+  report_drafts:'snapshot_id, created_at, contents_json',
+  audit_events:'org_id, actor, at, kind, entity_type, entity_id, details_json',
  };
  for(const [table,columns] of Object.entries(immutable)){
   db.exec(`CREATE TRIGGER IF NOT EXISTS immutable_${table} BEFORE UPDATE OF ${columns} ON ${table}

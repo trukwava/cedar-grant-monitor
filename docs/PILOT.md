@@ -17,3 +17,5 @@
 - **Measures:** reconciled totals by metric, time to evidence trace, false-positive alerts, missed actionable issues, share of quarantined rows resolved, and reviewer confidence based on inspected evidence—not a fabricated numeric score.
 - **Stop conditions:** an unexplained discrepancy in published totals, loss of source provenance, accidental cross-organization access, materially misleading freshness status, or unapproved handling of sensitive source records.
 - **Next scope decision:** only after repeatable reconciliation and useful alerts, select **one** reviewed read-only CRM adapter or report-export enhancement. Defer broad predictions, external submissions and participant intake.
+
+Snapshot verification is a pilot stop condition: a failed pinned recomputation must block report-draft generation until reviewed, not silently alter totals. Measure verifier failures and diagnosis time during the shadow trial; there are no empirical reliability claims yet.
