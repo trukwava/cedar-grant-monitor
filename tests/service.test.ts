@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {openDB,DEMO_ORG} from '../src/db.ts';
+import {openDB,DEMO_ORG,migrate} from '../src/db.ts';
 import {seedDemo,resetDemo} from '../src/seed.ts';
 import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail} from '../src/service.ts';
 import {partialCsv,lateArrivalCsv,sampleCsv} from '../src/fixtures.ts';
@@ -112,5 +112,61 @@ test('reset deletes only flagged demo org and preserves foreign organizations',(
  const db=setup();db.prepare('INSERT INTO organizations VALUES(?,?,?)').run('another','Other organization',0);
  resetDemo(db);assert.equal((db.prepare('SELECT COUNT(*) n FROM organizations WHERE id=?').get(DEMO_ORG) as any).n,0);
  assert.equal((db.prepare('SELECT COUNT(*) n FROM organizations WHERE id=?').get('another') as any).n,1);
+ db.close();
+});
+
+test('SQLite rejects cross-organization relationships on INSERT and UPDATE, even if caller bypasses API',()=>{
+ const db=setup();
+ db.prepare('INSERT INTO organizations VALUES(?,?,?)').run('partner-org','Partner fixture',0);
+ db.prepare("INSERT INTO source_datasets VALUES(?,?,?,?,?)").run('partner-source','partner-org','Partner source','csv',10);
+ const original=(db.prepare('SELECT * FROM import_batches WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ const grant=(db.prepare('SELECT * FROM grants WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ const period=(db.prepare('SELECT * FROM grant_periods WHERE grant_id=? LIMIT 1').get(grant.id) as any);
+ const metric=(db.prepare('SELECT * FROM metric_definition_versions WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ const obligation=(db.prepare('SELECT * FROM obligation_versions WHERE grant_id=? LIMIT 1').get(grant.id) as any);
+ const snapshot=(db.prepare('SELECT * FROM calculation_snapshots WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ const total=(db.prepare('SELECT * FROM snapshot_totals WHERE snapshot_id=? LIMIT 1').get(snapshot.id) as any);
+ const alert=(db.prepare('SELECT * FROM alerts WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ const report=(db.prepare('SELECT * FROM report_drafts WHERE org_id=? LIMIT 1').get(DEMO_ORG) as any);
+ // Cross-tenant references are rejected on INSERT, despite otherwise valid foreign keys.
+ throws(()=>db.prepare(`INSERT INTO import_batches SELECT 'x-batch', 'partner-org', source_dataset_id, sha256, source_as_of, imported_at, status, expected_rows, row_count, valid_count, issue_count, is_complete, raw_csv, notes FROM import_batches WHERE id=?`).run(original.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare(`INSERT INTO program_records SELECT 'x-rec', batch_id, 'partner-org', row_number, external_id, participant_id, program_code, event_type, event_date, status, evidence_ref, raw_json, normalized_json, issues_json, is_valid FROM program_records WHERE batch_id=? LIMIT 1`).run(original.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare(`INSERT INTO calculation_snapshots SELECT 'x-snap','partner-org',batch_id,as_of,created_at,source_hash,metric_versions_json,status FROM calculation_snapshots WHERE id=?`).run(snapshot.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare(`INSERT INTO report_drafts SELECT 'x-report','partner-org',snapshot_id,created_at,status,contents_json FROM report_drafts WHERE id=?`).run(report.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare(`INSERT INTO alerts SELECT 'x-alert','partner-org',obligation_key,snapshot_id,kind,trigger_hash,state,severity,explanation,assignee,snoozed_until,snooze_reason,created_at,updated_at FROM alerts WHERE id=?`).run(alert.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare(`INSERT INTO assignments VALUES(?,?,?,?,?)`).run('x-assignment','partner-org',alert.id,'Partner User','2026-10-29T00:00:00Z'),/Cross-organization reference rejected/);
+ // A valid second tenant can have its own grant, reporting period, metric, batch and snapshot.
+ db.prepare('INSERT INTO grants VALUES(?,?,?,?,?,?,?,?)').run('partner-grant','partner-org','Partner Grant','Partner','PRT','Partner Owner','2026-01-01','2026-12-31');
+ db.prepare('INSERT INTO grant_periods VALUES(?,?,?,?,?,?)').run('partner-period','partner-grant','Partner window','2026-01-01','2026-12-31','2027-01-15');
+ db.prepare('INSERT INTO metric_definition_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('partner-metric','partner-org','partner-placements',1,'placements','placement','PRT',0,'{}','enabled','2026-01-01T00:00:00Z');
+ throws(()=>db.prepare('INSERT INTO obligation_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('x-ob',grant.id,'partner-period',metric.id,'x-ob',1,10,'2026-10-01','Owner','Required','enabled'),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('INSERT INTO obligation_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('x-ob2',grant.id,period.id,'partner-metric','x-ob2',1,10,'2026-10-01','Owner','Required','enabled'),/Cross-organization reference rejected/);
+ db.prepare('INSERT INTO obligation_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('partner-ob','partner-grant','partner-period','partner-metric','partner-placements',1,10,'2026-01-01','Owner','Required','enabled');
+ db.prepare(`INSERT INTO import_batches SELECT 'partner-batch','partner-org','partner-source',sha256,source_as_of,imported_at,status,expected_rows,row_count,valid_count,issue_count,is_complete,raw_csv,notes FROM import_batches WHERE id=?`).run(original.id);
+ db.prepare(`INSERT INTO calculation_snapshots SELECT 'partner-snap','partner-org','partner-batch',as_of,created_at,source_hash,metric_versions_json,status FROM calculation_snapshots WHERE id=?`).run(snapshot.id);
+ throws(()=>db.prepare(`INSERT INTO snapshot_totals SELECT 'x-total','partner-snap',obligation_version_id,obligation_key,achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('UPDATE report_drafts SET org_id=? WHERE id=?').run('partner-org',report.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('UPDATE calculation_snapshots SET batch_id=? WHERE id=?').run('partner-batch',snapshot.id),/Cross-organization reference rejected/);
+ throws(()=>db.prepare('UPDATE obligation_versions SET metric_version_id=? WHERE id=?').run('partner-metric',obligation.id),/Cross-organization reference rejected/);
+ db.prepare(`INSERT INTO snapshot_totals SELECT 'partner-total','partner-snap','partner-ob','partner-placements',achieved,target,baseline,source_count,excluded_count,missing_evidence_count,included_rows_json,excluded_examples_json,missing_evidence_refs_json FROM snapshot_totals WHERE id=?`).run(total.id);
+ assert.equal((db.prepare("SELECT COUNT(*) n FROM snapshot_totals WHERE snapshot_id='partner-snap'").get() as any).n,1);
+ assert.equal(dashboard(db).organization.id,DEMO_ORG);
+ assert.equal(dashboard(db,'partner-org').organization.id,'partner-org');
+ assert.ok(dashboard(db,'partner-org').grants.every((g:any)=>g.org_id==='partner-org'));
+ db.close();
+});
+
+
+test('migration refuses pre-existing cross-organization references instead of trusting legacy rows',()=>{
+ const db=setup(),r=dashboard(db).reports[0];
+ db.prepare('INSERT INTO organizations VALUES(?,?,?)').run('legacy-foreign','Legacy org',0);
+ db.exec('DROP TRIGGER scope_report_drafts_update');
+ db.prepare('UPDATE report_drafts SET org_id=? WHERE id=?').run('legacy-foreign',r.id);
+ throws(()=>migrate(db),/Organization relationship mismatch in report_drafts/);
+ // Repair the corrupted relationship and then verify idempotent migration.
+ db.prepare('UPDATE report_drafts SET org_id=? WHERE id=?').run(DEMO_ORG,r.id);
+ migrate(db);
+ const report=db.prepare('SELECT org_id FROM report_drafts WHERE id=?').get(r.id) as any;
+ assert.equal(report.org_id,DEMO_ORG);
  db.close();
 });

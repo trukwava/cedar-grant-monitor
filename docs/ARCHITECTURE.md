@@ -8,7 +8,7 @@ Single-process TypeScript Node.js 22 application, SQLite as durable relational s
 
 `organizations` → `users`, `grants`, `source_datasets`, `record_mappings`, `import_batches`, `calculation_snapshots`, `alerts`, `report_drafts`, `audit_events`.
 
-`grants` → `grant_periods` → `obligation_versions` → `metric_definition_versions`; `import_batches` → `program_records`; `calculation_snapshots` → `snapshot_totals` and `alerts`; `report_drafts` pin `calculation_snapshots`. See SQL statements in `src/db.ts` for actual table definitions and constraints.
+`grants` → `grant_periods` → `obligation_versions` → `metric_definition_versions`; `import_batches` → `program_records`; `calculation_snapshots` → `snapshot_totals` and `alerts`; `report_drafts` pin `calculation_snapshots`. See SQL statements in `src/db.ts` for actual table definitions and constraints. Cross-organization references are prohibited by `scope_*` SQLite triggers (on insert and ownership-changing updates) for imported records, source datasets, snapshots, obligations, metrics, alerts, assignments, and reports. Startup validates existing relationships and foreign keys before accepting new writes. The HTTP server still deliberately supports only one fixed synthetic organization.
 
 ### Lifecycle
 

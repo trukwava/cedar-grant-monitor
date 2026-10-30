@@ -40,7 +40,43 @@ CREATE INDEX IF NOT EXISTS idx_records_batch ON program_records(batch_id,is_vali
 CREATE INDEX IF NOT EXISTS idx_snapshots_org ON calculation_snapshots(org_id,created_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_org ON alerts(org_id,state);
 `);
+ installScopeGuards(db);
 }
+/** Defense in depth: SQLite FKs verify that referenced rows exist, but not that
+ * both sides belong to the same organization. These guards enforce tenancy at
+ * the data boundary, including writes from future adapters and migrations.
+ * All guard names/SQL expressions below are constant application code.
+ */
+const scopedReferences: Array<{table:string; updateColumns:string; valid:string}> = [
+ {table:'import_batches',updateColumns:'org_id, source_dataset_id',valid:'NEW.org_id = (SELECT org_id FROM source_datasets WHERE id=NEW.source_dataset_id)'},
+ {table:'program_records',updateColumns:'org_id, batch_id',valid:'NEW.org_id = (SELECT org_id FROM import_batches WHERE id=NEW.batch_id)'},
+ {table:'calculation_snapshots',updateColumns:'org_id, batch_id',valid:'NEW.org_id = (SELECT org_id FROM import_batches WHERE id=NEW.batch_id)'},
+ {table:'report_drafts',updateColumns:'org_id, snapshot_id',valid:'NEW.org_id = (SELECT org_id FROM calculation_snapshots WHERE id=NEW.snapshot_id)'},
+ {table:'alerts',updateColumns:'org_id, snapshot_id, obligation_key',valid:`NEW.org_id = (SELECT org_id FROM calculation_snapshots WHERE id=NEW.snapshot_id)
+ AND EXISTS(SELECT 1 FROM obligation_versions ov JOIN grants g ON g.id=ov.grant_id WHERE g.org_id=NEW.org_id AND ov.obligation_key=NEW.obligation_key)`},
+ {table:'assignments',updateColumns:'org_id, alert_id',valid:'NEW.org_id = (SELECT org_id FROM alerts WHERE id=NEW.alert_id)'},
+ {table:'obligation_versions',updateColumns:'grant_id, period_id, metric_version_id',valid:`NEW.grant_id = (SELECT grant_id FROM grant_periods WHERE id=NEW.period_id)
+ AND (SELECT org_id FROM grants WHERE id=NEW.grant_id) = (SELECT org_id FROM metric_definition_versions WHERE id=NEW.metric_version_id)`},
+ {table:'snapshot_totals',updateColumns:'snapshot_id, obligation_version_id',valid:`(SELECT org_id FROM calculation_snapshots WHERE id=NEW.snapshot_id) =
+ (SELECT g.org_id FROM obligation_versions ov JOIN grants g ON g.id=ov.grant_id WHERE ov.id=NEW.obligation_version_id)`},
+];
+function installScopeGuards(db:DB):void {
+ if(db.prepare('PRAGMA foreign_key_check').get())throw new Error('Existing database contains invalid foreign keys; restore a reviewed backup');
+ // CREATE TRIGGER is not retroactive. Refuse an existing database with broken
+ // ownership relationships rather than quietly trusting previously written rows.
+ for(const {table,valid} of scopedReferences){
+  const predicate=valid.replace(/\bNEW\./g,'candidate.');
+  const bad=db.prepare(`SELECT id FROM ${table} AS candidate WHERE NOT (${predicate}) LIMIT 1`).get();
+  if(bad)throw new Error(`Organization relationship mismatch in ${table}; repair from a reviewed backup before starting`);
+ }
+ for(const {table,updateColumns,valid} of scopedReferences){
+  for(const [action,suffix] of [['INSERT','insert'],[`UPDATE OF ${updateColumns}`,'update']]){
+   db.exec(`CREATE TRIGGER IF NOT EXISTS scope_${table}_${suffix} BEFORE ${action} ON ${table}
+     WHEN NOT (${valid}) BEGIN SELECT RAISE(ABORT,'Cross-organization reference rejected'); END;`);
+  }
+ }
+}
+
 export function assertOrg(db:DB, entityTable:'grants'|'alerts'|'report_drafts'|'import_batches'|'calculation_snapshots', entityId:string, orgId:string):void {
  const found = db.prepare(`SELECT id FROM ${entityTable} WHERE id=? AND org_id=?`).get(entityId,orgId);
  if(!found) throw Object.assign(new Error('Not found in current organization'),{status:404});

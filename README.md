@@ -60,6 +60,7 @@ This is a useful defense-in-depth step for a trusted local demonstration, **not*
 | Rule review | Preview before enabling a new draft definition; effective-dated target amendments |
 | Demo recovery | Repeatable fixtures and scoped reset |
 | Optional local access control | Configurable password sign-in; viewer/reviewer/admin permissions enforced at HTTP endpoints, CSRF and origin checks |
+| Cross-organization integrity | SQLite triggers reject cross-organization foreign references on insert and ownership-changing updates; migration preflight detects legacy violations |
 
 **Exact checks:** 25 qualifying placement records include two already-counted people, so the result is **23 distinct people**. A target of 40 at day 45 of a 90-day window produces a **linear pacing baseline of 20**—a stated assumption, not proof of program failure.
 
@@ -89,7 +90,7 @@ Values use synthetic IDs. `event_type`: `placement`, `attendance`, `enrollment`,
 ## Architecture
 
 - **Server:** small Node.js 22 HTTP application, TypeScript source executed with `--experimental-strip-types`.
-- **Persistence:** built-in `node:sqlite` with relational constraints, immutable-source triggers, foreign keys, audit trail and source checksums.
+- **Persistence:** built-in `node:sqlite` with relational constraints, immutable-source and organization-integrity triggers, foreign keys, audit trail and source checksums.
 - **UI:** static HTML/CSS/JavaScript; no build chain, CDN, cookies, analytics or external services.
 - **Domain:** pure counting/validation helpers in `src/domain.ts`, transactional operations in `src/service.ts`, schema in `src/db.ts`, fixtures and initialization in `src/fixtures.ts` and `src/seed.ts`.
 - **Testing:** Node's built-in test runner, `tests/*.test.ts`; `npm run check` additionally requires a separately installed TypeScript compiler and Node type definitions, and is not required to run the demo.
@@ -102,7 +103,7 @@ There is no generative-AI-driven rules engine: metric definitions, source mappin
 npm test
 ```
 
-Tests cover the local sign-in boundary (unauthenticated GETs, role authorization, CSRF and origin rejection, logout), the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, data immutability, and scoped reset.
+Tests cover the local sign-in boundary (unauthenticated GETs, role authorization, CSRF and origin rejection, logout), the exact 25→23 rule, event-vs-person deduplication, pacing baseline, CSV quoting, seed shape, idempotent imports, explicit quarantine acceptance, partial-import protection, late records, independent recomputation, amendments, stateful alerts, staleness, completed-period replay, organization-scoped service access, database-enforced cross-organization reference rejection, legacy-data preflight, data immutability, and scoped reset.
 
 CI runs these tests on Node 22; a green CI run is **not** a security or regulatory certification. Browser automation was blocked by the execution environment and is still pending; see [verification log](docs/VERIFICATION.md).
 
