@@ -8,7 +8,7 @@ import {reportCsv} from './domain.ts';
 import {crmConnectionStatus,FixtureCRMAdapter} from './adapters.ts';
 import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
-import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,verifySnapshot,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
+import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,verifySnapshot,compareSnapshots,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
 const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
@@ -61,6 +61,10 @@ async function router(req:IncomingMessage,res:ServerResponse){
   if(method==='GET'&&url==='/api/adapters/status')return send(res,200,crmConnectionStatus());
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
+  if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)\/compare\/([\w-]+)$/)){
+   const [fromId,toId]=match(url,/^\/api\/snapshots\/([\w-]+)\/compare\/([\w-]+)$/)!;
+   return send(res,200,compareSnapshots(db,fromId,toId));
+  }
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)\/verify$/))return send(res,200,verifySnapshot(db,match(url,/^\/api\/snapshots\/([\w-]+)\/verify$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)$/))return send(res,200,snapshotDetail(db,match(url,/^\/api\/snapshots\/([\w-]+)$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/preview\/([\w-]+)$/)){

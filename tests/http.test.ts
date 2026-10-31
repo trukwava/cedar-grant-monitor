@@ -38,6 +38,15 @@ test('HTTP: immutable draft CSV reconciles to JSON; untrusted Host and Origin re
   const historicalVerify=await call(port,'GET',`/api/snapshots/${bootstrap.snapshot.snapshot.id}/verify`);
   assert.equal(historicalVerify.status,200);
   assert.equal(JSON.parse(historicalVerify.body).verified,true);
+  assert.ok(bootstrap.snapshotHistory.length>=2);
+  const earlier=bootstrap.snapshotHistory.find((s:any)=>s.id!==bootstrap.snapshot.snapshot.id);
+  const compareHttp=await call(port,'GET',`/api/snapshots/${earlier.id}/compare/${bootstrap.snapshot.snapshot.id}`);
+  assert.equal(compareHttp.status,200);
+  const comparison=JSON.parse(compareHttp.body);
+  assert.equal(comparison.verified,true);
+  assert.ok(comparison.changes.some((x:any)=>!x.comparable));
+  assert.equal((await call(port,'GET',`/api/snapshots/${earlier.id}/compare/not-real`)).status,404);
+  assert.equal((await call(port,'GET',`/api/snapshots/${earlier.id}/compare/${earlier.id}`)).status,400);
   const snapshotId=bootstrap.snapshot.snapshot.id;
   const created=await call(port,'POST','/api/reports',{snapshotId});assert.equal(created.status,201);
   const reportId=JSON.parse(created.body).id;

@@ -133,3 +133,9 @@ Public code is not a public service. The demo is local-only, unauthenticated and
 ## Offline export integrity manifests
 
 For each draft report, `GET /api/reports/{id}/manifest` returns SHA-256 checksums and UTF-8 byte lengths for the exact `export` JSON and `export.csv` downloads. A reviewer can compare downloaded bytes to the manifest to detect accidental modification or mismatched exports. This is **not** a digital signature, does not authenticate the server, and is not proof that upstream source data is correct.
+
+## Historical snapshot change review (v0.9)
+
+Open **Reports → Snapshot change review** to compare an earlier frozen snapshot with the latest one. Both source snapshots are independently verified before comparison; a failed verification blocks comparison. The server also offers `GET /api/snapshots/{oldId}/compare/{newId}`. The response includes as-of dates, source hashes and dataset identities, per-obligation achieved/target/evidence differences, and counted-record identifiers added or removed. Numerical deltas are displayed **only when the same reporting window and exact metric-definition version are shared**. Target amendments are labeled separately; new/retired obligations and definition changes are explicitly non-comparable. An added record ID is not a claim that a new person was served. Snapshots and reports remain unchanged.
+
+CSV/JSON report downloads have a separate SHA-256 manifest download in the Reports interface. This verifies byte equality only; it is not a signature.

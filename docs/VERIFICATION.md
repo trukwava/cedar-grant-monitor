@@ -29,3 +29,9 @@
 ## Prior baseline
 
 The published v0.4 baseline passed 23 tests; v0.5 passed 26 tests, including relational organization integrity, legacy-data preflight, HTTP host/origin/CSRF protection, and snapshot/report reconciliation.
+
+## v0.9 snapshot comparison regression checks
+
+`npm test` (37 tests) includes comparable late-arrival differences, effective-dated target amendments, non-comparable reporting windows, cross-organization denial, corrupt-source rejection, and read-only HTTP response checks. Compare the verified seeded Autumn snapshot against the completed Spring replay: obligations should be treated as added/removed, not as comparable outcomes. No real CRM or customer data was used.
+
+The local `npm run check` requires the missing `@types/node` package, so strict TypeScript checking was unavailable offline. Node 22.16 runtime tests and `node --check public/app.js` passed.

@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openDB,DEMO_ORG,migrate} from '../src/db.ts';
 import {seedDemo,resetDemo} from '../src/seed.ts';
-import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail,verifySnapshot} from '../src/service.ts';
+import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail,verifySnapshot,compareSnapshots} from '../src/service.ts';
 import {partialCsv,lateArrivalCsv,sampleCsv} from '../src/fixtures.ts';
 function setup(){const db=openDB(':memory:');seedDemo(db);return db;}
 function throws(fn:()=>any,pattern:RegExp){assert.throws(fn,pattern);}
@@ -248,5 +248,69 @@ test('historical snapshots, totals, reports and audit-event contents cannot be c
  throws(()=>db.prepare('UPDATE report_drafts SET contents_json=? WHERE id=?').run('{}',report.id),reject);
  throws(()=>db.prepare('UPDATE audit_events SET actor=? WHERE id=?').run('spoofed',event),reject);
  assert.equal(verifySnapshot(db,snapshot.id).verified,true);
+ db.close();
+});
+
+
+test('historical comparison explains late-arriving outcome without rewriting evidence',()=>{
+ const db=setup();const before=dashboard(db).snapshot.snapshot.id;
+ const old=reportDraft(db,before);
+ const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
+ const after=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-29'});
+ const comparison=compareSnapshots(db,before,after.id);
+ assert.equal(comparison.verified,true);
+ assert.equal(comparison.sameReportingCutoff,true);
+ assert.equal(comparison.sameSourceDataset,true);
+ const jobs=comparison.changes.find((c:any)=>c.obligationKey==='jobs-placements');
+ assert.ok(jobs);assert.equal(jobs.comparable,true);
+ assert.equal(jobs.achievedDelta,1);assert.equal(jobs.from.achieved,23);assert.equal(jobs.to.achieved,24);
+ assert.equal(jobs.targetDelta,0);assert.equal(jobs.addedRecordIds.length,1);
+ assert.equal(jobs.removedRecordIds.length,0);
+ assert.equal(getReport(db,old.id).contents.obligations.find((c:any)=>c.key==='jobs-placements').achieved,23);
+ assert.equal(dashboard(db).snapshotHistory[0].id,after.id);
+ assert.ok(dashboard(db).snapshotHistory.some((c:any)=>c.id===before));
+ assert.throws(()=>compareSnapshots(db,before,before),/two different snapshots/);
+ db.close();
+});
+
+test('historical comparison distinguishes amendments, changing time windows, and tenancy',()=>{
+ const db=setup();const first=dashboard(db).snapshot.snapshot.id;
+ createAmendment(db,'jobs-placements',{target:45,effectiveOn:'2026-10-30'});
+ const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-30',expectedRows:121});
+ const amended=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-30'});
+ const result=compareSnapshots(db,first,amended.id);
+ const jobs=result.changes.find((x:any)=>x.obligationKey==='jobs-placements');
+ assert.equal(jobs.comparable,true);assert.equal(jobs.targetDelta,5);
+ assert.equal(jobs.targetAmended,true);assert.equal(jobs.achievedDelta,1);
+ const spring=(db.prepare("SELECT id FROM calculation_snapshots WHERE org_id=? AND as_of='2026-06-29'").get(DEMO_ORG) as any).id;
+ const crossPeriod=compareSnapshots(db,spring,first);
+ assert.ok(crossPeriod.changes.every((x:any)=>!x.comparable));
+ assert.equal(crossPeriod.changes.find((x:any)=>x.obligationKey==='jobs-placements').achievedDelta,null);
+ assert.throws(()=>compareSnapshots(db,first,amended.id,'foreign-org'),/Not found in current organization/);
+ db.close();
+});
+
+test('snapshot comparison blocks source corruption rather than returning misleading deltas',()=>{
+ const db=setup();const before=dashboard(db).snapshot.snapshot.id;
+ const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
+ const after=commitImport(db,staged.id,{acceptQuarantine:true});
+ db.exec('DROP TRIGGER prevent_record_mutation');
+ db.prepare("UPDATE program_records SET participant_id='tampered' WHERE batch_id=? AND row_number=2").run(staged.id);
+ assert.throws(()=>compareSnapshots(db,before,after.id),/comparison blocked/);
+ db.close();
+});
+
+
+test('same obligation key with changed metric definition is not represented as numeric progress',()=>{
+ const db=setup();const first=dashboard(db).snapshot.snapshot.id;
+ const former=(db.prepare("SELECT ov.*,m.metric_key,m.org_id,m.program_code FROM obligation_versions ov JOIN metric_definition_versions m ON ov.metric_version_id=m.id WHERE ov.obligation_key='jobs-placements' ORDER BY ov.version DESC LIMIT 1").get() as any);
+ db.prepare('INSERT INTO metric_definition_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('jobs-alt-metric',DEMO_ORG,former.metric_key,2,'attendance_instances','attendance',former.program_code,0,'{}','enabled','2026-10-30T00:00:00Z');
+ db.prepare('INSERT INTO obligation_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('jobs-alt-ov',former.grant_id,former.period_id,'jobs-alt-metric',former.obligation_key,2,40,'2026-10-30',former.owner,former.evidence_rule,'enabled');
+ const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-30',expectedRows:121});
+ const next=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-30'});
+ const result=compareSnapshots(db,first,next.id);
+ const changed=result.changes.find((x:any)=>x.obligationKey==='jobs-placements');
+ assert.equal(changed.status,'definition_or_period_changed');
+ assert.equal(changed.comparable,false);assert.equal(changed.achievedDelta,null);assert.equal(changed.targetDelta,null);
  db.close();
 });

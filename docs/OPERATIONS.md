@@ -45,3 +45,9 @@ curl -s http://127.0.0.1:4173/api/snapshots/SNAPSHOT_ID/verify
 ```
 
 In protected mode, a signed-in viewer may inspect verification results. The response separates source SHA-256, raw CSV-row reconciliation, normalized-record reconciliation, definition completeness and each obligation result. A failed check blocks generating a **new** reporting draft but does not rewrite an existing draft. If an import fails with `Malformed CSV quoting`, repair the original CSV and stage it as a new file; do not repair the immutable stored batch. Oversized request bodies return HTTP 413; reduce the file or split exports under the documented limits.
+
+## Comparing historical reporting snapshots
+
+Open **Reports → Snapshot change review**, choose a historical snapshot, then compare it to the latest. The server verifies both original sources and each pinned metric definition. Source or definition corruption produces an explicit error instead of a misleading change report. A matching obligation name is not enough: the metric-definition **version** and reporting-period **ID** must match before an achievement delta appears. A target change is separately labeled an amendment.
+
+For API-based review, retrieve `GET /api/bootstrap` to find `snapshotHistory`, then `GET /api/snapshots/{olderId}/compare/{newerId}`. The read-only comparison includes source dates, dataset identities and counted record-ID differences. Different as-of dates are not normalized to equal observation periods; treat these as source change explanations, not causal impact claims.

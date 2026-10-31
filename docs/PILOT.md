@@ -19,3 +19,7 @@
 - **Next scope decision:** only after repeatable reconciliation and useful alerts, select **one** reviewed read-only CRM adapter or report-export enhancement. Defer broad predictions, external submissions and participant intake.
 
 Snapshot verification is a pilot stop condition: a failed pinned recomputation must block report-draft generation until reviewed, not silently alter totals. Measure verifier failures and diagnosis time during the shadow trial; there are no empirical reliability claims yet.
+
+## Change-review acceptance case
+
+In shadow mode, use the original 120-row full export and the 121-row late-arrival export. Have the grants reviewer compare their verified frozen snapshots. The placements metric should change from 23 to 24 distinct people while the prior draft remains at 23. Repeat after a target amendment to verify that target changes are labeled independently. Changed counting definitions must yield **not comparable**, not a positive or negative performance delta. Record time to reconcile and any apparent false changes.

@@ -207,7 +207,7 @@ export function createAmendment(db:DB,key:string,args:{target:number,effectiveOn
 export function snapshotDetail(db:DB,id:string,orgId=currentOrg()):any{
  assertOrg(db,'calculation_snapshots',id,orgId);
  const snapshot=one(db,'SELECT * FROM calculation_snapshots WHERE id=?',id);
- const totals=q(db,`SELECT st.*,ov.owner,ov.evidence_rule,m.unit,m.metric_key,g.name grant_name,g.funder,p.label period_label,p.report_due_on,p.starts_on,p.ends_on FROM snapshot_totals st
+ const totals=q(db,`SELECT st.*,ov.owner,ov.evidence_rule,ov.metric_version_id,ov.period_id,ov.version obligation_version,m.unit,m.metric_key,g.name grant_name,g.funder,p.label period_label,p.report_due_on,p.starts_on,p.ends_on FROM snapshot_totals st
  JOIN obligation_versions ov ON st.obligation_version_id=ov.id JOIN grants g ON ov.grant_id=g.id JOIN grant_periods p ON ov.period_id=p.id JOIN metric_definition_versions m ON ov.metric_version_id=m.id WHERE st.snapshot_id=? ORDER BY g.name,st.obligation_key`,id);
  return {snapshot,totals:totals.map((t:any)=>({...t,included:JSON.parse(t.included_rows_json),excluded_examples:JSON.parse(t.excluded_examples_json),missing_evidence_refs:JSON.parse(t.missing_evidence_refs_json)}))};
 }
@@ -258,6 +258,52 @@ export function verifySnapshot(db:DB,snapshotId:string,orgId=currentOrg()):any{
  return {snapshotId,asOf:detail.snapshot.as_of,checksumMatches,sourceRowCountMatches,sourceRowsMatchOriginal,normalizedRowsMatchPersisted,
   definitionsComplete,verified:checksumMatches&&sourceRowCountMatches&&sourceRowsMatchOriginal&&normalizedRowsMatchPersisted&&definitionsComplete&&results.every(x=>x.verified),
   obligations:results};
+}
+
+/** Compare two independently verified, frozen snapshots without changing either.
+ * A definition/window change is not an outcome delta; never present it as one.
+ * Included record IDs are provenance references, not a count of new people.
+ */
+export function compareSnapshots(db:DB,fromId:string,toId:string,orgId=currentOrg()):any{
+ if(fromId===toId)fail('Choose two different snapshots to compare',400);
+ const before=snapshotDetail(db,fromId,orgId),after=snapshotDetail(db,toId,orgId);
+ if(!verifySnapshot(db,fromId,orgId).verified||!verifySnapshot(db,toId,orgId).verified)
+  fail('Snapshot comparison blocked: an underlying source or pinned definition failed verification',409);
+ const source=(batchId:string)=>one(db,`SELECT b.source_as_of,b.sha256,b.row_count,b.issue_count,b.source_dataset_id,
+  s.name source_name,s.adapter source_adapter FROM import_batches b JOIN source_datasets s ON s.id=b.source_dataset_id
+  WHERE b.id=? AND b.org_id=?`,batchId,orgId);
+ const fromSource=source(before.snapshot.batch_id),toSource=source(after.snapshot.batch_id);
+ if(!fromSource||!toSource)fail('Snapshot source unavailable',409);
+ const fromRows=new Map<string,any>(before.totals.map((x:any)=>[x.obligation_key,x]));
+ const toRows=new Map<string,any>(after.totals.map((x:any)=>[x.obligation_key,x]));
+ const changes=[...new Set([...fromRows.keys(),...toRows.keys()])].sort().map(key=>{
+  const previous=fromRows.get(key),current=toRows.get(key);
+  const comparable=Boolean(previous&&current&&previous.metric_version_id===current.metric_version_id&&previous.period_id===current.period_id);
+  const reason=!previous?'new_obligation':!current?'removed_obligation':!comparable?'definition_or_period_changed':'same_definition_and_period';
+  const oldRecords=new Set<string>((previous?.included||[]).map((r:any)=>r.record_id));
+  const newRecords=new Set<string>((current?.included||[]).map((r:any)=>r.record_id));
+  return {obligationKey:key,grant:current?.grant_name||previous?.grant_name,
+   status:reason,comparable,unit:current?.unit||previous?.unit,
+   from:{achieved:previous?.achieved??null,target:previous?.target??null,missingEvidence:previous?.missing_evidence_count??null,definitionVersion:previous?.obligation_version_id??null},
+   to:{achieved:current?.achieved??null,target:current?.target??null,missingEvidence:current?.missing_evidence_count??null,definitionVersion:current?.obligation_version_id??null},
+   achievedDelta:comparable?current.achieved-previous.achieved:null,
+   targetDelta:comparable?current.target-previous.target:null,
+   evidenceGapDelta:comparable?current.missing_evidence_count-previous.missing_evidence_count:null,
+   addedRecordIds:comparable?[...newRecords].filter(id=>!oldRecords.has(id)).sort():[],
+   removedRecordIds:comparable?[...oldRecords].filter(id=>!newRecords.has(id)).sort():[],
+   targetAmended:comparable&&previous.target!==current.target,
+  };
+ });
+ return {schema:'cedar.snapshot-comparison.v1',organizationId:orgId,
+  from:{id:fromId,asOf:before.snapshot.as_of,createdAt:before.snapshot.created_at,...fromSource},
+  to:{id:toId,asOf:after.snapshot.as_of,createdAt:after.snapshot.created_at,...toSource},
+  sameReportingCutoff:before.snapshot.as_of===after.snapshot.as_of,
+  sameSourceDataset:fromSource.source_dataset_id===toSource.source_dataset_id,
+  verified:true,changes,
+  notes:['Both snapshots independently verified against their original immutable source batches.',
+   'Numeric achievement differences appear only when metric-definition version and reporting period match.',
+   'Added or removed included record IDs are evidence-set differences, not necessarily newly served people.',
+   'Different as-of dates, source datasets, or changed targets require human interpretation; pacing is a heuristic.']};
 }
 
 export function reportDraft(db:DB,snapshotId:string,orgId=currentOrg()):any{
@@ -324,5 +370,6 @@ export function dashboard(db:DB,orgId=currentOrg()):any{
  const alerts=q(db,"SELECT * FROM alerts WHERE org_id=? ORDER BY CASE state WHEN 'open' THEN 0 WHEN 'acknowledged' THEN 1 ELSE 2 END, created_at DESC",orgId);
  const auditTrail=q(db,'SELECT at,kind,entity_type,entity_id,details_json FROM audit_events WHERE org_id=? ORDER BY rowid DESC LIMIT 24',orgId);
  const snapshot=snap?snapshotDetail(db,snap.id,orgId):null;
- return {mappings,drafts,organization:{id:orgId,name:(one(db,'SELECT name FROM organizations WHERE id=?',orgId)?.name||'Unknown organization')+(orgId=== 'cedar-demo'?' · DEMO':'')},grants,alerts,imports,datasets,auditTrail,snapshot,reports:q(db,'SELECT id,snapshot_id,created_at,status FROM report_drafts WHERE org_id=? ORDER BY rowid DESC LIMIT 15',orgId),connection:{status:'demo_csv_and_fixture_only',crm:'Not connected',fixture:'SIMULATED · no CRM connection',model:'Not enabled'}};
+ const snapshotHistory=q(db,`SELECT c.id,c.as_of,c.created_at,c.batch_id,b.source_as_of,s.name source_name FROM calculation_snapshots c JOIN import_batches b ON b.id=c.batch_id JOIN source_datasets s ON s.id=b.source_dataset_id WHERE c.org_id=? ORDER BY c.rowid DESC LIMIT 30`,orgId);
+ return {mappings,drafts,organization:{id:orgId,name:(one(db,'SELECT name FROM organizations WHERE id=?',orgId)?.name||'Unknown organization')+(orgId=== 'cedar-demo'?' · DEMO':'')},grants,alerts,imports,datasets,auditTrail,snapshot,snapshotHistory,reports:q(db,'SELECT id,snapshot_id,created_at,status FROM report_drafts WHERE org_id=? ORDER BY rowid DESC LIMIT 15',orgId),connection:{status:'demo_csv_and_fixture_only',crm:'Not connected',fixture:'SIMULATED · no CRM connection',model:'Not enabled'}};
 }

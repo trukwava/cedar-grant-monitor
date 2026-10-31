@@ -37,3 +37,7 @@ The fixture endpoint is a deterministic local read-only source: it cannot fetch 
 Report draft creation checks snapshot/source consistency before storing a new frozen report. Independent recomputation can catch alterations to counted records, raw rows, normalized copies, definition pins, or stored totals. Audits, reports and snapshots reject in-place field updates in ordinary SQLite writes. This is not a cryptographic audit log, database encryption, or protection against a malicious host administrator.
 
 Malformed CSV quotes are rejected explicitly; request bodies exceeding 2.1MB receive HTTP 413. Production deployment would still require separate load testing, streaming ingestion, secure upload storage, DoS mitigations and a reviewed retention/deletion policy.
+
+## Historical comparison boundary
+
+The comparison route is read-only and requires the same server-selected organization for **both** snapshot IDs. It independently verifies their stored source batches and pinned definitions before emitting counted record IDs. Neither query parameters nor response data can select another tenant. The result is evidence for human reconciliation, not a compliance attestation or proof that CRM exports were complete.
