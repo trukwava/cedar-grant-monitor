@@ -35,3 +35,12 @@ The published v0.4 baseline passed 23 tests; v0.5 passed 26 tests, including rel
 `npm test` (37 tests) includes comparable late-arrival differences, effective-dated target amendments, non-comparable reporting windows, cross-organization denial, corrupt-source rejection, and read-only HTTP response checks. Compare the verified seeded Autumn snapshot against the completed Spring replay: obligations should be treated as added/removed, not as comparable outcomes. No real CRM or customer data was used.
 
 The local `npm run check` requires the missing `@types/node` package, so strict TypeScript checking was unavailable offline. Node 22.16 runtime tests and `node --check public/app.js` passed.
+
+
+## v0.10 local verification (2026-11-02)
+
+- `npm test`: 39/39 passing on Node.js 22.16.0, including two new workflow regressions.
+- `node --check public/app.js`: passed.
+- The new isolated HTTP test launches a real loopback server against a temporary SQLite database and verifies partial-export rejection, explicit acceptance of quarantined rows, late-outcome counting, publication retry idempotency, unchanged prior report bytes, snapshot verification, and JSON/CSV SHA-256 agreement with manifest.
+- Static UI regression checks the staged-import publish date control and its inline `role=alert` error area. This does not substitute for screen-reader or keyboard-only browser verification.
+- Production CRM and public hosting remain unavailable by design; this is a synthetic-only local proof of concept.

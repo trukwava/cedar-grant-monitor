@@ -51,3 +51,7 @@ In protected mode, a signed-in viewer may inspect verification results. The resp
 Open **Reports → Snapshot change review**, choose a historical snapshot, then compare it to the latest. The server verifies both original sources and each pinned metric definition. Source or definition corruption produces an explicit error instead of a misleading change report. A matching obligation name is not enough: the metric-definition **version** and reporting-period **ID** must match before an achievement delta appears. A target change is separately labeled an amendment.
 
 For API-based review, retrieve `GET /api/bootstrap` to find `snapshotHistory`, then `GET /api/snapshots/{olderId}/compare/{newerId}`. The read-only comparison includes source dates, dataset identities and counted record-ID differences. Different as-of dates are not normalized to equal observation periods; treat these as source change explanations, not causal impact claims.
+
+### v0.10: staged import publication
+
+In **Data imports**, inspect the quarantined records first. The publish panel defaults **Snapshot as-of date** to the staged export's original source date, not today's system date. Change this explicitly only to calculate a later valid reporting cutoff with the same source export. After a failed attempt, stay on the same staged import and read the inline error; correct the date or quarantine acknowledgment and retry. An incomplete import cannot publish regardless of date or acknowledgment. Previous published snapshots and report downloads are preserved.

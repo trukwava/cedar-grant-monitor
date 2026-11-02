@@ -128,7 +128,7 @@ CI runs these tests on Node 22; a green CI run is **not** a security or regulato
 
 Source: https://github.com/trukwava/cedar-grant-monitor
 
-Public code is not a public service. The demo is local-only, unauthenticated and uses synthetic data; never deploy it to the internet or import private records.
+Public code is not a public service. The demo is loopback-only, uses synthetic data, and supports optional local password protection; neither mode is production authentication. Never deploy it to the internet or import private records.
 
 ## Offline export integrity manifests
 
@@ -139,3 +139,11 @@ For each draft report, `GET /api/reports/{id}/manifest` returns SHA-256 checksum
 Open **Reports → Snapshot change review** to compare an earlier frozen snapshot with the latest one. Both source snapshots are independently verified before comparison; a failed verification blocks comparison. The server also offers `GET /api/snapshots/{oldId}/compare/{newId}`. The response includes as-of dates, source hashes and dataset identities, per-obligation achieved/target/evidence differences, and counted-record identifiers added or removed. Numerical deltas are displayed **only when the same reporting window and exact metric-definition version are shared**. Target amendments are labeled separately; new/retired obligations and definition changes are explicitly non-comparable. An added record ID is not a claim that a new person was served. Snapshots and reports remain unchanged.
 
 CSV/JSON report downloads have a separate SHA-256 manifest download in the Reports interface. This verifies byte equality only; it is not a signature.
+
+## Import publication and recovery (v0.10)
+
+After staging an export, the **Publish this import** review panel shows a **Snapshot as-of date** prefilled with the immutable source export date. The date must not precede the source export and must fall inside an active reporting period to calculate obligations. It is never silently replaced by the computer's current date.
+
+If publication is rejected (incomplete export, unaccepted quarantine, invalid date, or missing active obligations), the staged source and issue list stay visible. The rejection appears beside the publish control, and operators can correct their choice and retry. The server retains the previous published snapshot until a complete, accepted import commits successfully.
+
+`tests/workflow.test.ts` exercises the full HTTP pathway: staging and rejecting a 35/120-row export; staging the 121-row late-arrival export; inspecting the metric preview; requiring quarantine approval; publishing a reproducible snapshot; idempotent retry; independent snapshot verification; immutable previous report; and byte-level JSON/CSV manifest reconciliation. A second test checks that the browser publish action uses the selected snapshot date and has an accessible error region. These are HTTP and source tests, not complete automated browser accessibility tests.
