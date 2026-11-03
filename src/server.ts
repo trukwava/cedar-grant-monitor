@@ -8,7 +8,13 @@ import {reportCsv} from './domain.ts';
 import {crmConnectionStatus,FixtureCRMAdapter} from './adapters.ts';
 import {status as authStatus,login as authLogin,logout as authLogout,checkAccess} from './auth.ts';
 import {seedDemo,resetDemo,writeFixtures} from './seed.ts';
-import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,snapshotDetail,verifySnapshot,compareSnapshots,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
+// No real identity provider is configured in this application. Refuse a
+// production-like invocation rather than silently falling back to demo auth.
+if(process.env.NODE_ENV==='production'||process.env.CEDAR_IDENTITY_MODE==='oidc')
+ throw Error('Production identity is not implemented. Cedar must run as a loopback-only synthetic demo.');
+if(process.env.CEDAR_IDENTITY_MODE&&!['local','demo'].includes(process.env.CEDAR_IDENTITY_MODE))
+ throw Error('Unknown CEDAR_IDENTITY_MODE; supported values: demo or local');
+import {dashboard,stageImport,stageCRMFixture,commitImport,importDetail,importIssues,snapshotDetail,verifySnapshot,compareSnapshots,previewMetric,alertAction,reportDraft,getReport,createAmendment,createGrantDraft,previewDraft,enableDraft} from './service.ts';
 const db=openDB();seedDemo(db);writeFixtures(path.resolve('fixtures'));
 const root=path.resolve(path.dirname(fileURLToPath(import.meta.url)),'../public');
 const port=Number(process.env.PORT||4173),host=process.env.HOST||'127.0.0.1';
@@ -60,6 +66,11 @@ async function router(req:IncomingMessage,res:ServerResponse){
   if(method==='POST'&&url==='/api/auth/logout'){return send(res,200,{authenticated:false},undefined,{'Set-Cookie':authLogout(req)});}
   if(method==='GET'&&url==='/api/adapters/status')return send(res,200,crmConnectionStatus());
   if(method==='GET'&&url==='/api/bootstrap')return send(res,200,dashboard(db));
+  if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)\/issues$/)){
+   const id=match(url,/^\/api\/imports\/([\w-]+)\/issues$/)![0];
+   const offset=Number(u.searchParams.get('offset')||0),limit=Number(u.searchParams.get('limit')||50);
+   return send(res,200,importIssues(db,id,offset,limit));
+  }
   if(method==='GET'&&match(url,/^\/api\/imports\/([\w-]+)$/))return send(res,200,importDetail(db,match(url,/^\/api\/imports\/([\w-]+)$/)![0]));
   if(method==='GET'&&match(url,/^\/api\/snapshots\/([\w-]+)\/compare\/([\w-]+)$/)){
    const [fromId,toId]=match(url,/^\/api\/snapshots\/([\w-]+)\/compare\/([\w-]+)$/)!;
@@ -105,7 +116,7 @@ async function router(req:IncomingMessage,res:ServerResponse){
     return send(res,201,stageCRMFixture(db,exported));
    }
    if(url==='/api/imports/stage')return send(res,201,stageImport(db,{csv:String(body.csv||''),sourceAsOf:String(body.sourceAsOf||''),expectedRows:body.expectedRows,notes:body.notes}));
-   if(match(url,/^\/api\/imports\/([\w-]+)\/commit$/))return send(res,201,commitImport(db,match(url,/^\/api\/imports\/([\w-]+)\/commit$/)![0],{acceptQuarantine:body.acceptQuarantine===true,asOf:body.asOf}));
+   if(match(url,/^\/api\/imports\/([\w-]+)\/commit$/))return send(res,201,commitImport(db,match(url,/^\/api\/imports\/([\w-]+)\/commit$/)![0],{acceptQuarantine:body.acceptQuarantine===true,asOf:body.asOf,reviewReason:body.reviewReason,reviewedSourceHash:body.reviewedSourceHash}));
    if(match(url,/^\/api\/alerts\/([\w-]+)\/(acknowledge|assign|snooze|resolve)$/)){
     const [id,action]=match(url,/^\/api\/alerts\/([\w-]+)\/(acknowledge|assign|snooze|resolve)$/)!;
     return send(res,200,alertAction(db,id,action,body));

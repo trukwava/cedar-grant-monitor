@@ -147,3 +147,28 @@ After staging an export, the **Publish this import** review panel shows a **Snap
 If publication is rejected (incomplete export, unaccepted quarantine, invalid date, or missing active obligations), the staged source and issue list stay visible. The rejection appears beside the publish control, and operators can correct their choice and retry. The server retains the previous published snapshot until a complete, accepted import commits successfully.
 
 `tests/workflow.test.ts` exercises the full HTTP pathway: staging and rejecting a 35/120-row export; staging the 121-row late-arrival export; inspecting the metric preview; requiring quarantine approval; publishing a reproducible snapshot; idempotent retry; independent snapshot verification; immutable previous report; and byte-level JSON/CSV manifest reconciliation. A second test checks that the browser publish action uses the selected snapshot date and has an accessible error region. These are HTTP and source tests, not complete automated browser accessibility tests.
+
+
+## Administrative review and accessibility (v0.11)
+
+For any staged import with quarantined rows, the administrator must explicitly
+acknowledge exclusion, enter a 12–500-character explanation, and submit the
+source SHA-256 fingerprint displayed during review. The backend rejects missing
+reasons and stale/mismatched fingerprints; its audit record attributes the
+review reason and source hash to the session actor. A partial export remains
+unpublishable, regardless of the explanation. Previously committed imports
+retain idempotent retry behavior.
+
+Keyboard navigation now tracks the active section, focuses newly opened page
+headings, and exposes errors as live alerts with visible focus indicators. An
+optional local Chromium/Playwright script in `tests/browser_accessibility.py`
+checks the complete workflow at desktop and mobile widths. Run it with
+`python tests/browser_accessibility.py` when Playwright and Chromium are
+installed. `npm test` does not depend on browser packages.
+
+A request to run with `NODE_ENV=production` or `CEDAR_IDENTITY_MODE=oidc`
+explicitly fails: no external SSO, OIDC, tenant provisioning, or production
+identity verification is implemented. Demo/optional local password modes
+remain available only on loopback.
+
+Exception review offers bounded pages of 50 rows, with an organization-scoped `/api/imports/{id}/issues?offset=0&limit=50` endpoint (limit 1–100). The first 50 shown on staging are only a preview; the interface can navigate every quarantine row.

@@ -23,3 +23,13 @@ body[data-cedar-role="reviewer"] [data-amend],
 body[data-cedar-role="reviewer"] [data-reset]{display:none!important}
 body[data-cedar-role="guest"] #navigation{opacity:.35}
 @media(max-width:600px){.auth-panel{margin:2rem .5rem;padding:1.3rem}}
+
+
+/* Keyboard and reduced-motion accessibility. Preserve a visible focus indication
+   on all actionable elements without changing pointer focus styling. */
+:where(button,a,input,select,textarea,[tabindex]):focus-visible{outline:3px solid #176c55;outline-offset:3px}
+.nav:focus-visible{outline:3px solid #e9e6a8;outline-offset:2px}
+#main h1[tabindex='-1']:focus{outline:none}
+#commit-error:not(:empty){margin:12px 0;padding:12px;border-left:4px solid #a3382c;background:#fff0ec;color:#742319}
+textarea.field{font-family:inherit;min-height:84px;resize:vertical;line-height:1.5}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important;scroll-behavior:auto!important}}

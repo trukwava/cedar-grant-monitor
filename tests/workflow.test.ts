@@ -61,7 +61,7 @@ test('complete HTTP workflow: recover from partial import, approve exceptions, p
   assert.equal(partial.status,201);
   const partialData=JSON.parse(partial.body);
   assert.equal(partialData.is_complete,0);
-  const blocked=await call(port,'POST',`/api/imports/${partialData.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29'});
+  const blocked=await call(port,'POST',`/api/imports/${partialData.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29',reviewReason:'Reviewed quarantined exceptions and approved exclusions.',reviewedSourceHash:partialData.sha256});
   assert.equal(blocked.status,409);
   assert.match(blocked.body,/Partial source export/);
   assert.equal(JSON.parse((await call(port,'GET','/api/bootstrap')).body).snapshot.snapshot.id,priorSnapshot);
@@ -78,11 +78,13 @@ test('complete HTTP workflow: recover from partial import, approve exceptions, p
   const preview=await call(port,'GET',`/api/preview/jobs-placements?batch=${batch.id}&asOf=2026-10-29`);
   assert.equal(preview.status,200);
   assert.equal(JSON.parse(preview.body).achieved,24);
-  const published=await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29'});
+  assert.equal((await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29',reviewedSourceHash:batch.sha256})).status,400);
+  assert.equal((await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29',reviewReason:'Reviewed quarantined exceptions and approved exclusions.',reviewedSourceHash:'0'.repeat(64)})).status,409);
+  const published=await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29',reviewReason:'Reviewed quarantined exceptions and approved exclusions.',reviewedSourceHash:batch.sha256});
   assert.equal(published.status,201);
   const newSnapshot=JSON.parse(published.body).id;
   assert.notEqual(newSnapshot,priorSnapshot);
-  const retry=await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29'});
+  const retry=await call(port,'POST',`/api/imports/${batch.id}/commit`,{acceptQuarantine:true,asOf:'2026-10-29',reviewReason:'Reviewed quarantined exceptions and approved exclusions.',reviewedSourceHash:batch.sha256});
   assert.equal(JSON.parse(retry.body).id,newSnapshot,'retry must be idempotent');
   const current=JSON.parse((await call(port,'GET','/api/bootstrap')).body);
   assert.equal(current.snapshot.snapshot.id,newSnapshot);
@@ -122,4 +124,15 @@ test('browser commit uses selected source date and exposes actionable failure st
  assert.match(code,/getField\('commit-asof'\)/);
  assert.match(code,/id="commit-error"/);
  assert.doesNotMatch(code,/asOf:getField\('source-asof'\)\|\|new Date\(\)/);
+});
+
+test('production identity mode fails closed rather than enabling demo access',async()=>{
+ const dir=mkdtempSync(path.join(os.tmpdir(),'cedar-identity-'));
+ const env={...process.env,DB_PATH:path.join(dir,'test.sqlite'),NODE_ENV:'production'};
+ const result=await new Promise<{code:number|null;stderr:string}>(resolve=>{
+  const proc=spawn(process.execPath,['--disable-warning=ExperimentalWarning','--experimental-sqlite','--experimental-strip-types',path.join(project,'src/server.ts')],{cwd:dir,env,stdio:['ignore','ignore','pipe']});
+  let stderr='';proc.stderr.on('data',chunk=>stderr+=chunk.toString());proc.on('exit',code=>resolve({code,stderr}));
+ });
+ assert.notEqual(result.code,0);assert.match(result.stderr,/Production identity is not implemented/);
+ rmSync(dir,{recursive:true,force:true});
 });

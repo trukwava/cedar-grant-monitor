@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {openDB,DEMO_ORG,migrate} from '../src/db.ts';
 import {seedDemo,resetDemo} from '../src/seed.ts';
-import {stageImport,commitImport,importDetail,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail,verifySnapshot,compareSnapshots} from '../src/service.ts';
+import {stageImport,commitImport,importDetail,importIssues,dashboard,previewMetric,reportDraft,getReport,alertAction,createAmendment,snapshotDetail,verifySnapshot,compareSnapshots} from '../src/service.ts';
 import {partialCsv,lateArrivalCsv,sampleCsv} from '../src/fixtures.ts';
 function setup(){const db=openDB(':memory:');seedDemo(db);return db;}
 function throws(fn:()=>any,pattern:RegExp){assert.throws(fn,pattern);}
@@ -28,7 +28,7 @@ test('partial export cannot replace valid portfolio',()=>{
  const db=setup();const before=dashboard(db).snapshot.snapshot.id;
  const staged=stageImport(db,{csv:partialCsv(),sourceAsOf:'2026-10-29',expectedRows:120});
  assert.equal(staged.is_complete,0);
- throws(()=>commitImport(db,staged.id,{acceptQuarantine:true}),/Partial source export/);
+ throws(()=>commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256}),/Partial source export/);
  assert.equal(dashboard(db).snapshot.snapshot.id,before);db.close();
 });
 test('quarantined records require explicit operator acceptance',()=>{
@@ -37,12 +37,45 @@ test('quarantined records require explicit operator acceptance',()=>{
  throws(()=>commitImport(db,stage.id),/Quarantined rows require explicit acceptance/);
  assert.equal(dashboard(db).snapshot.snapshot.id,before);db.close();
 });
+test('quarantine exceptions are paginated without hiding rows or crossing organizations',()=>{
+ const db=setup();
+ const lines=sampleCsv().trimEnd().split('\n');
+ for(let i=1;i<=65;i++){const fields=lines[i].split(',');fields[2]='UNKNOWN-CODE-TEST';lines[i]=fields.join(',');}
+ const batch=stageImport(db,{csv:lines.join('\n')+'\n',sourceAsOf:'2026-10-29',expectedRows:120});
+ assert.ok(batch.quarantined>=65);
+ assert.equal(batch.issues.length,50,'stage response is intentionally bounded');
+ const first=importIssues(db,batch.id,0,50);const second=importIssues(db,batch.id,50,50);
+ assert.equal(first.issues.length,50);assert.equal(first.hasMore,true);
+ assert.equal(first.total,batch.quarantined);
+ assert.equal(new Set([...first.issues,...second.issues].map(x=>x.row)).size,batch.quarantined);
+ assert.equal(second.hasMore,false);
+ throws(()=>importIssues(db,batch.id,-1,50),/Invalid exception page/);
+ throws(()=>importIssues(db,batch.id,0,101),/Invalid exception page/);
+ throws(()=>importIssues(db,batch.id,0,50,'another-org'),/Not found in current organization/);
+ db.close();
+});
+test('administrator quarantine review is bound to source hash and audit rationale',()=>{
+ const db=setup();const stage=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
+ const before=dashboard(db).snapshot.snapshot.id;
+ throws(()=>commitImport(db,stage.id,{acceptQuarantine:true,reviewedSourceHash:stage.sha256}),/review reason/);
+ throws(()=>commitImport(db,stage.id,{acceptQuarantine:true,reviewedSourceHash:'0'.repeat(64),reviewReason:'Reviewed source exceptions.'}),/checksum does not match/);
+ throws(()=>commitImport(db,stage.id,{acceptQuarantine:true,reviewedSourceHash:stage.sha256,reviewReason:'too short'}),/review reason/);
+ assert.equal(dashboard(db).snapshot.snapshot.id,before);
+ const reason='Duplicate IDs and an unknown program code are excluded pending source correction.';
+ const snap=commitImport(db,stage.id,{acceptQuarantine:true,reviewedSourceHash:stage.sha256,reviewReason:reason});
+ assert.ok(snap.id);
+ const audit=db.prepare("SELECT details_json FROM audit_events WHERE kind='import.committed' AND entity_id=? ORDER BY rowid DESC LIMIT 1").get(stage.id) as any;
+ assert.ok(audit);
+ const details=JSON.parse(audit.details_json);
+ assert.equal(details.reviewReason,reason);assert.equal(details.reviewedSourceHash,stage.sha256);
+ db.close();
+});
 test('late record creates new snapshot without changing prior report',()=>{
  const db=setup();const oldSnap=dashboard(db).snapshot.snapshot.id;
  const oldReport=reportDraft(db,oldSnap);const oldJson=getReport(db,oldReport.id).contents;
  assert.equal(oldJson.obligations.find((o:any)=>o.key==='jobs-placements').achieved,23);
  const s=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
- const newSnap=commitImport(db,s.id,{acceptQuarantine:true,asOf:'2026-10-29'});
+ const newSnap=commitImport(db,s.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:s.sha256,asOf:'2026-10-29'});
  const current=dashboard(db);assert.equal(current.snapshot.snapshot.id,newSnap.id);
  assert.equal(current.snapshot.totals.find((o:any)=>o.obligation_key==='jobs-placements').achieved,24);
  assert.equal(snapshotDetail(db,oldSnap).totals.find((o:any)=>o.obligation_key==='jobs-placements').achieved,23);
@@ -62,7 +95,7 @@ test('amendment versions do not rewrite historical snapshot or report',()=>{
  const v=createAmendment(db,'jobs-placements',{target:45,effectiveOn:'2026-10-30'});
  assert.equal(v.version,2);assert.equal(dashboard(db).snapshot.totals.find((t:any)=>t.obligation_key==='jobs-placements').target,40);
  const stage=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-30',expectedRows:121});
- const after=commitImport(db,stage.id,{acceptQuarantine:true,asOf:'2026-10-30'});
+ const after=commitImport(db,stage.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:stage.sha256,asOf:'2026-10-30'});
  assert.equal(snapshotDetail(db,after.id).totals.find((t:any)=>t.obligation_key==='jobs-placements').target,45);
  assert.equal(snapshotDetail(db,before).totals.find((t:any)=>t.obligation_key==='jobs-placements').target,40);db.close();
 });
@@ -72,13 +105,13 @@ test('ownership survives alert acknowledgement and new evidence; active trigger 
  alertAction(db,alert.id,'acknowledge');
  throws(()=>alertAction(db,alert.id,'resolve'),/Active triggers cannot/);
  const stage=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
- commitImport(db,stage.id,{acceptQuarantine:true});
+ commitImport(db,stage.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:stage.sha256});
  const a=dashboard(db).alerts.find((x:any)=>x.id===alert.id);
  assert.equal(a.assignee,'Review Officer');assert.equal(a.state,'acknowledged');db.close();
 });
 test('stale source creates explicit alert instead of healthy-looking performance',()=>{
  const db=setup();const stage=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
- commitImport(db,stage.id,{acceptQuarantine:true,asOf:'2026-11-20'});
+ commitImport(db,stage.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:stage.sha256,asOf:'2026-11-20'});
  const alerts=dashboard(db).alerts.filter((a:any)=>a.kind==='missing_source'&&a.state==='open');
  assert.ok(alerts.length>0);assert.match(alerts[0].explanation,/Source export is 22 days old/);db.close();
 });
@@ -256,7 +289,7 @@ test('historical comparison explains late-arriving outcome without rewriting evi
  const db=setup();const before=dashboard(db).snapshot.snapshot.id;
  const old=reportDraft(db,before);
  const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
- const after=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-29'});
+ const after=commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256,asOf:'2026-10-29'});
  const comparison=compareSnapshots(db,before,after.id);
  assert.equal(comparison.verified,true);
  assert.equal(comparison.sameReportingCutoff,true);
@@ -277,7 +310,7 @@ test('historical comparison distinguishes amendments, changing time windows, and
  const db=setup();const first=dashboard(db).snapshot.snapshot.id;
  createAmendment(db,'jobs-placements',{target:45,effectiveOn:'2026-10-30'});
  const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-30',expectedRows:121});
- const amended=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-30'});
+ const amended=commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256,asOf:'2026-10-30'});
  const result=compareSnapshots(db,first,amended.id);
  const jobs=result.changes.find((x:any)=>x.obligationKey==='jobs-placements');
  assert.equal(jobs.comparable,true);assert.equal(jobs.targetDelta,5);
@@ -293,7 +326,7 @@ test('historical comparison distinguishes amendments, changing time windows, and
 test('snapshot comparison blocks source corruption rather than returning misleading deltas',()=>{
  const db=setup();const before=dashboard(db).snapshot.snapshot.id;
  const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-29',expectedRows:121});
- const after=commitImport(db,staged.id,{acceptQuarantine:true});
+ const after=commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256});
  db.exec('DROP TRIGGER prevent_record_mutation');
  db.prepare("UPDATE program_records SET participant_id='tampered' WHERE batch_id=? AND row_number=2").run(staged.id);
  assert.throws(()=>compareSnapshots(db,before,after.id),/comparison blocked/);
@@ -307,7 +340,7 @@ test('same obligation key with changed metric definition is not represented as n
  db.prepare('INSERT INTO metric_definition_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('jobs-alt-metric',DEMO_ORG,former.metric_key,2,'attendance_instances','attendance',former.program_code,0,'{}','enabled','2026-10-30T00:00:00Z');
  db.prepare('INSERT INTO obligation_versions VALUES(?,?,?,?,?,?,?,?,?,?,?)').run('jobs-alt-ov',former.grant_id,former.period_id,'jobs-alt-metric',former.obligation_key,2,40,'2026-10-30',former.owner,former.evidence_rule,'enabled');
  const staged=stageImport(db,{csv:lateArrivalCsv(),sourceAsOf:'2026-10-30',expectedRows:121});
- const next=commitImport(db,staged.id,{acceptQuarantine:true,asOf:'2026-10-30'});
+ const next=commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256,asOf:'2026-10-30'});
  const result=compareSnapshots(db,first,next.id);
  const changed=result.changes.find((x:any)=>x.obligationKey==='jobs-placements');
  assert.equal(changed.status,'definition_or_period_changed');

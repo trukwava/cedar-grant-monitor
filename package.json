@@ -1,6 +1,6 @@
 {
   "name": "cedar-pathways-grant-monitor",
-  "version": "0.10.0",
+  "version": "0.11.0",
   "private": true,
   "type": "module",
   "description": "Auditable synthetic grant deliverables monitor",

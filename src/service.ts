@@ -62,8 +62,18 @@ export function stageCRMFixture(db:DB,exportData:{source:'fixture';fixtureId:str
 export function importDetail(db:DB,id:string,orgId=currentOrg()):any{
  assertOrg(db,'import_batches',id,orgId);
  const batch=one(db,`SELECT b.*,s.name source_name,s.adapter source_adapter FROM import_batches b JOIN source_datasets s ON s.id=b.source_dataset_id WHERE b.id=? AND b.org_id=?`,id,orgId);
- const issues=q(db,'SELECT row_number,external_id,program_code,issues_json,raw_json FROM program_records WHERE batch_id=? AND org_id=? AND is_valid=0 ORDER BY row_number LIMIT 50',id,orgId).map((r:any)=>({row:r.row_number,external_id:r.external_id,program_code:r.program_code,issues:JSON.parse(r.issues_json),raw:JSON.parse(r.raw_json)}));
+ const issues=importIssues(db,id,0,50,orgId).issues;
  return {...batch,issues,quarantined:batch.row_count-batch.valid_count};
+}
+/** Read all exception rows in bounded pages rather than hiding anything after
+ * the first fifty. Source access remains bound to the current organization. */
+export function importIssues(db:DB,id:string,offset=0,limit=50,orgId=currentOrg()):any{
+ assertOrg(db,'import_batches',id,orgId);
+ if(!Number.isInteger(offset)||offset<0||!Number.isInteger(limit)||limit<1||limit>100)
+  fail('Invalid exception page; offset must be >= 0 and limit between 1 and 100');
+ const total=(one(db,'SELECT COUNT(*) n FROM program_records WHERE batch_id=? AND org_id=? AND is_valid=0',id,orgId) as any).n;
+ const issues=q(db,'SELECT row_number,external_id,program_code,issues_json,raw_json FROM program_records WHERE batch_id=? AND org_id=? AND is_valid=0 ORDER BY row_number LIMIT ? OFFSET ?',id,orgId,limit,offset).map((r:any)=>({row:r.row_number,external_id:r.external_id,program_code:r.program_code,issues:JSON.parse(r.issues_json),raw:JSON.parse(r.raw_json)}));
+ return {id,total,offset,limit,issues,hasMore:offset+issues.length<total};
 }
 function activeObligations(db:DB,orgId:string,asOf:string):any[]{
  return q(db,`SELECT ov.*,g.name grant_name,g.owner grant_owner,g.program_code grant_program,g.org_id,p.label period_label,p.starts_on,p.ends_on,p.report_due_on,m.metric_key,m.version metric_version,m.unit,m.event_type,m.program_code metric_program,m.needs_evidence,m.status metric_status
@@ -106,12 +116,17 @@ function evaluatePinnedMetric(db:DB,o:any,batchId:string,asOf:string,orgId:strin
  return {obligation:o,achieved:result.count,target:o.target,baseline:linearBaseline(o.target,o.starts_on,o.ends_on,asOf),sourceCount:result.sourceCount,duplicates:result.duplicates,excludedCount:all.length-result.included.length,missingEvidence:missing.map(r=>r.external_id),included:counted.map(r=>({record_id:r.external_id,participant_id:r.participant_id,evidence_ref:r.evidence_ref||null,event_date:r.event_date})),excludedExamples:excluded};
 }
 
-export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolean,asOf?:string}={},orgId=currentOrg()):any{
+export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolean,asOf?:string,reviewReason?:string,reviewedSourceHash?:string}={},orgId=currentOrg()):any{
  const batch=importDetail(db,batchId,orgId);
  if(batch.status==='committed')return one(db,'SELECT * FROM calculation_snapshots WHERE batch_id=? AND org_id=? ORDER BY rowid DESC LIMIT 1',batchId,orgId);
  if(batch.status!=='staged')fail('Import is not staged',409);
  if(!batch.is_complete)fail('Partial source export cannot replace current snapshot',409);
- if(batch.quarantined>0&&!args.acceptQuarantine)fail('Quarantined rows require explicit acceptance before publishing',409);
+ if(batch.quarantined>0){
+  if(!args.acceptQuarantine)fail('Quarantined rows require explicit acceptance before publishing',409);
+  if(args.reviewedSourceHash!==batch.sha256)fail('The reviewed source checksum does not match this staged batch; reopen and review its exceptions',409);
+  if(typeof args.reviewReason!=='string'||args.reviewReason.trim().length<12||args.reviewReason.trim().length>500)
+   fail('An administrator review reason of 12–500 characters is required when excluding quarantined rows');
+ }
  const asOf=args.asOf||batch.source_as_of;
  if(!validateDate(asOf)||asOf<batch.source_as_of)fail('Snapshot date must be valid and not before source export date');
  const active=activeObligations(db,orgId,asOf);
@@ -126,7 +141,7 @@ export function commitImport(db:DB,batchId:string,args:{acceptQuarantine?:boolea
    const p=previewMetric(db,o.obligation_key,batchId,asOf,orgId);
    insert.run(uid('total'),snapId,o.id,o.obligation_key,p.achieved,p.target,p.baseline,p.sourceCount,p.excludedCount,p.missingEvidence.length,json(p.included),json(p.excludedExamples),json(p.missingEvidence));
   }
-  audit(db,orgId,'import.committed','import_batch',batchId,{snapshot:snapId,asOf,quarantined:batch.quarantined});
+  audit(db,orgId,'import.committed','import_batch',batchId,{snapshot:snapId,asOf,quarantined:batch.quarantined,reviewedSourceHash:batch.sha256,reviewReason:batch.quarantined?args.reviewReason!.trim():null});
   syncAlerts(db,snapId,orgId);
   return one(db,'SELECT * FROM calculation_snapshots WHERE id=?',snapId);
  });

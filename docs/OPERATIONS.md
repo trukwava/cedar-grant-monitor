@@ -55,3 +55,19 @@ For API-based review, retrieve `GET /api/bootstrap` to find `snapshotHistory`, t
 ### v0.10: staged import publication
 
 In **Data imports**, inspect the quarantined records first. The publish panel defaults **Snapshot as-of date** to the staged export's original source date, not today's system date. Change this explicitly only to calculate a later valid reporting cutoff with the same source export. After a failed attempt, stay on the same staged import and read the inline error; correct the date or quarantine acknowledgment and retry. An incomplete import cannot publish regardless of date or acknowledgment. Previous published snapshots and report downloads are preserved.
+
+
+## v0.11 quarantine sign-off
+
+Inspect staging exceptions and confirm the source SHA-256 hash before publication.
+If there are quarantined rows, the administrator must check the exclusion
+acknowledgement and enter a substantive explanation (12–500 characters).
+The server checks the hash and saves the sign-off with the authenticated actor
+in the audit log. A partial source cannot be published. Correct an input problem
+by staging a new export; never rewrite a previously committed batch.
+
+Optional local Chromium smoke test: `python tests/browser_accessibility.py`
+requires Python Playwright and an installed Chromium. It intentionally runs
+against an ephemeral database; it is not a CI dependency or a full WCAG audit.
+
+Use **Next 50 exceptions** to review more than fifty quarantined records before signing off; an import detail is only a preview, not the complete quarantine list.

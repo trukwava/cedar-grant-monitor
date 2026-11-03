@@ -44,3 +44,15 @@ The local `npm run check` requires the missing `@types/node` package, so strict 
 - The new isolated HTTP test launches a real loopback server against a temporary SQLite database and verifies partial-export rejection, explicit acceptance of quarantined rows, late-outcome counting, publication retry idempotency, unchanged prior report bytes, snapshot verification, and JSON/CSV SHA-256 agreement with manifest.
 - Static UI regression checks the staged-import publish date control and its inline `role=alert` error area. This does not substitute for screen-reader or keyboard-only browser verification.
 - Production CRM and public hosting remain unavailable by design; this is a synthetic-only local proof of concept.
+
+
+## v0.11 checks (2026-11-02)
+
+The Node test suite covers missing review reasons, wrong source checksums,
+immutable audit provenance, partial-export rejection, production-mode fail-closed
+behavior, and static accessibility contract checks, and exception pagination with 65+ invalid rows. `npm test` passed locally.
+The optional Playwright smoke test is included but could not run in this
+restricted execution environment: Chromium's navigation to the loopback server
+returned `net::ERR_BLOCKED_BY_ADMINISTRATOR`. This is a test-environment blocker,
+not a verified browser accessibility result. Run on an unrestricted developer
+workstation before claiming desktop or mobile browser conformance.

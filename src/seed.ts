@@ -72,10 +72,10 @@ export function seedDemo(db:DB,{reset=false}:{reset?:boolean}={}):void {
   audit(db,DEMO_ORG,'demo.seed','organization',DEMO_ORG,{grants:6,obligations:12,synthetic:true});
  });
  const spring=stageImport(db,{csv:springCsv(),sourceAsOf:'2026-06-29',expectedRows:40,notes:'Completed spring reporting-period replay · synthetic'});
- const springSnapshot=commitImport(db,spring.id,{acceptQuarantine:true,asOf:'2026-06-29'});
+ const springSnapshot=commitImport(db,spring.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:spring.sha256,asOf:'2026-06-29'});
  reportDraft(db,springSnapshot.id);
  const staged=stageImport(db,{csv:sampleCsv(),sourceAsOf:AS_OF,expectedRows:120,notes:'Synthetic full CRM export · includes two quarantined rows'});
- commitImport(db,staged.id,{acceptQuarantine:true,asOf:AS_OF});
+ commitImport(db,staged.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the demo import.',reviewedSourceHash:staged.sha256,asOf:AS_OF});
  stageImport(db,{csv:partialCsv(),sourceAsOf:AS_OF,expectedRows:120,notes:'Deliberately incomplete source · cannot replace portfolio snapshot'});
 }
 export function writeFixtures(folder='fixtures'):void {

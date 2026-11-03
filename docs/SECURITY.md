@@ -41,3 +41,19 @@ Malformed CSV quotes are rejected explicitly; request bodies exceeding 2.1MB rec
 ## Historical comparison boundary
 
 The comparison route is read-only and requires the same server-selected organization for **both** snapshot IDs. It independently verifies their stored source batches and pinned definitions before emitting counted record IDs. Neither query parameters nor response data can select another tenant. The result is evidence for human reconciliation, not a compliance attestation or proof that CRM exports were complete.
+
+
+## v0.11 administrative sign-off and identity fail-closed behavior
+
+When a complete import contains quarantined rows, the commit endpoint requires
+a source-hash match plus a 12–500-character administrator reason. It records the
+reason and authenticated actor in the audit events, without changing source
+records. This is an auditable acknowledgement, **not** an independent approval
+or proof of source completeness. Untrusted text remains inert and subject to
+length validation. No exceptions can make a partial export publishable.
+
+`NODE_ENV=production` and `CEDAR_IDENTITY_MODE=oidc` are deliberately rejected
+at startup. Implementing an external identity provider requires server-side
+issuer/audience/nonce validation, rotation-safe JWK verification, authenticated
+organization mapping, revocation, HTTPS, and independently reviewed tenancy
+tests. None of these are claimed as implemented here.
