@@ -28,7 +28,8 @@ test('simulated read-only export uses immutable staging, quarantine, and partial
  assert.equal(full.source_name,'Simulated CRM read-only export (not connected)');
  assert.equal(stageCRMFixture(db,await adapter.readFullExport('full')).id,full.id);
  assert.throws(()=>commitImport(db,full.id),/Quarantined rows require explicit/);
- const snap=commitImport(db,full.id,{acceptQuarantine:true});
+ assert.throws(()=>commitImport(db,full.id,{acceptQuarantine:true}),/reviewed source checksum does not match/);
+ const snap=commitImport(db,full.id,{acceptQuarantine:true,reviewReason:'Reviewed quarantine exclusions for the simulated CRM export.',reviewedSourceHash:full.sha256});
  assert.equal(snap.batch_id,full.id);
  assert.equal(importDetail(db,full.id).status,'committed');
  const report=reportDraft(db,snap.id);const frozen=getReport(db,report.id);
